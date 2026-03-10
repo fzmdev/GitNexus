@@ -2,6 +2,7 @@ import { KnowledgeGraph } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
 import { SymbolTable } from './symbol-table.js';
 import { ImportMap } from './import-processor.js';
+import { resolveSymbol } from './symbol-resolver.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
@@ -171,8 +172,10 @@ interface ResolveResult {
  * A. Check imported files first (highest confidence)
  * B. Check local file definitions
  * C. Fuzzy global search (lowest confidence)
- * 
- * Returns confidence score so agents know what to trust.
+ *
+ * Delegates resolution tiers to resolveSymbol and maps the result back to a
+ * ResolveResult for backward compatibility with callers that need confidence
+ * scores and reason strings.
  */
 const resolveCallTarget = (
   calledName: string,
@@ -180,32 +183,24 @@ const resolveCallTarget = (
   symbolTable: SymbolTable,
   importMap: ImportMap
 ): ResolveResult | null => {
-  // Strategy B first (cheapest — single map lookup): Check local file
-  const localNodeId = symbolTable.lookupExact(currentFile, calledName);
-  if (localNodeId) {
-    return { nodeId: localNodeId, confidence: 0.85, reason: 'same-file' };
-  }
+  const resolved = resolveSymbol(calledName, currentFile, symbolTable, importMap);
+  if (!resolved) return null;
 
-  // Strategy A: Check if any definition of calledName is in an imported file
-  // Reversed: instead of iterating all imports and checking each, get all definitions
-  // and check if any is imported. O(definitions) instead of O(imports).
+  // Map back to ResolveResult for backward compatibility
+  const isLocal = resolved.filePath === currentFile;
+  const importedFiles = importMap.get(currentFile);
+  const isImported = importedFiles?.has(resolved.filePath) ?? false;
+
+  if (isLocal) {
+    return { nodeId: resolved.nodeId, confidence: 0.85, reason: 'same-file' };
+  }
+  if (isImported) {
+    return { nodeId: resolved.nodeId, confidence: 0.9, reason: 'import-resolved' };
+  }
+  // Fuzzy global: confidence depends on how many competing definitions exist
   const allDefs = symbolTable.lookupFuzzy(calledName);
-  if (allDefs.length > 0) {
-    const importedFiles = importMap.get(currentFile);
-    if (importedFiles) {
-      for (const def of allDefs) {
-        if (importedFiles.has(def.filePath)) {
-          return { nodeId: def.nodeId, confidence: 0.9, reason: 'import-resolved' };
-        }
-      }
-    }
-
-    // Strategy C: Fuzzy global (no import match found)
-    const confidence = allDefs.length === 1 ? 0.5 : 0.3;
-    return { nodeId: allDefs[0].nodeId, confidence, reason: 'fuzzy-global' };
-  }
-
-  return null;
+  const confidence = allDefs.length === 1 ? 0.5 : 0.3;
+  return { nodeId: resolved.nodeId, confidence, reason: 'fuzzy-global' };
 };
 
 /**
@@ -284,24 +279,18 @@ export const processRoutesFromExtracted = async (
 
     if (!route.controllerName || !route.methodName) continue;
 
-    // Resolve controller class in symbol table
-    const controllerDefs = symbolTable.lookupFuzzy(route.controllerName);
-    if (controllerDefs.length === 0) continue;
+    // Resolve controller class using shared resolveSymbol (Tier 1: same file,
+    // Tier 2: import-scoped, Tier 3: global fuzzy).
+    const controllerDef = resolveSymbol(route.controllerName, route.filePath, symbolTable, importMap);
+    if (!controllerDef) continue;
 
-    // Prefer import-resolved match
+    // Derive confidence from where the controller was found
     const importedFiles = importMap.get(route.filePath);
-    let controllerDef = controllerDefs[0];
-    let confidence = controllerDefs.length === 1 ? 0.7 : 0.5;
-
-    if (importedFiles) {
-      for (const def of controllerDefs) {
-        if (importedFiles.has(def.filePath)) {
-          controllerDef = def;
-          confidence = 0.9;
-          break;
-        }
-      }
-    }
+    const isImportedController = importedFiles?.has(controllerDef.filePath) ?? false;
+    const allControllerDefs = symbolTable.lookupFuzzy(route.controllerName);
+    const confidence = isImportedController
+      ? 0.9
+      : allControllerDefs.length === 1 ? 0.7 : 0.5;
 
     // Find the method on the controller
     const methodId = symbolTable.lookupExact(controllerDef.filePath, route.methodName);

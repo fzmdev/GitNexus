@@ -17,6 +17,12 @@ export interface SymbolTable {
   lookupExact: (filePath: string, name: string) => string | undefined;
   
   /**
+   * High Confidence: Look for a symbol in a specific file, returning full definition.
+   * Includes type information needed for heritage resolution (Class vs Interface).
+   */
+  lookupExactFull: (filePath: string, name: string) => SymbolDefinition | undefined;
+
+  /**
    * Low Confidence: Look for a symbol anywhere in the project
    * Used when imports are missing or for framework magic
    */
@@ -62,6 +68,13 @@ export const createSymbolTable = (): SymbolTable => {
     return fileSymbols.get(name);
   };
 
+  const lookupExactFull = (filePath: string, name: string): SymbolDefinition | undefined => {
+    const nodeId = lookupExact(filePath, name);
+    if (!nodeId) return undefined;
+    const defs = globalIndex.get(name);
+    return defs?.find(d => d.filePath === filePath);
+  };
+
   const lookupFuzzy = (name: string): SymbolDefinition[] => {
     return globalIndex.get(name) || [];
   };
@@ -76,5 +89,5 @@ export const createSymbolTable = (): SymbolTable => {
     globalIndex.clear();
   };
 
-  return { add, lookupExact, lookupFuzzy, getStats, clear };
+  return { add, lookupExact, lookupExactFull, lookupFuzzy, getStats, clear };
 };

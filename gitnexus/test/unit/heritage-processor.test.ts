@@ -2,15 +2,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { processHeritageFromExtracted } from '../../src/core/ingestion/heritage-processor.js';
 import { createSymbolTable } from '../../src/core/ingestion/symbol-table.js';
 import { createKnowledgeGraph } from '../../src/core/graph/graph.js';
+import { createImportMap } from '../../src/core/ingestion/import-processor.js';
+import type { ImportMap } from '../../src/core/ingestion/import-processor.js';
 import type { ExtractedHeritage } from '../../src/core/ingestion/workers/parse-worker.js';
 
 describe('processHeritageFromExtracted', () => {
   let graph: ReturnType<typeof createKnowledgeGraph>;
   let symbolTable: ReturnType<typeof createSymbolTable>;
+  let importMap: ImportMap;
 
   beforeEach(() => {
     graph = createKnowledgeGraph();
     symbolTable = createSymbolTable();
+    importMap = createImportMap();
   });
 
   describe('extends', () => {
@@ -25,7 +29,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const rels = graph.relationships.filter(r => r.type === 'EXTENDS');
       expect(rels).toHaveLength(1);
@@ -42,7 +46,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const rels = graph.relationships.filter(r => r.type === 'EXTENDS');
       expect(rels).toHaveLength(1);
@@ -60,7 +64,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
       expect(graph.relationshipCount).toBe(0);
     });
   });
@@ -77,7 +81,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'implements',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const rels = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
       expect(rels).toHaveLength(1);
@@ -97,7 +101,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'trait-impl',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const rels = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
       expect(rels).toHaveLength(1);
@@ -117,7 +121,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends', // C# base_list always sends extends
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
       const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
@@ -138,7 +142,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
@@ -155,7 +159,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
       expect(impls).toHaveLength(1);
@@ -170,7 +174,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
@@ -186,7 +190,7 @@ describe('processHeritageFromExtracted', () => {
         kind: 'extends',
       }];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       // "Id" starts with I but second char is lowercase — should be EXTENDS
       const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
@@ -205,7 +209,7 @@ describe('processHeritageFromExtracted', () => {
         { filePath: 'src/Repo.cs', className: 'UserRepo', parentName: 'IDisposable', kind: 'extends' },
       ];
 
-      await processHeritageFromExtracted(graph, heritage, symbolTable);
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
 
       const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
@@ -221,7 +225,7 @@ describe('processHeritageFromExtracted', () => {
       { filePath: 'src/e.rs', className: 'E', parentName: 'F', kind: 'trait-impl' },
     ];
 
-    await processHeritageFromExtracted(graph, heritage, symbolTable);
+    await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
     expect(graph.relationships.filter(r => r.type === 'EXTENDS')).toHaveLength(1);
     expect(graph.relationships.filter(r => r.type === 'IMPLEMENTS')).toHaveLength(2);
   });
@@ -232,12 +236,12 @@ describe('processHeritageFromExtracted', () => {
     ];
 
     const onProgress = vi.fn();
-    await processHeritageFromExtracted(graph, heritage, symbolTable, onProgress);
+    await processHeritageFromExtracted(graph, heritage, symbolTable, importMap, onProgress);
     expect(onProgress).toHaveBeenCalledWith(1, 1);
   });
 
   it('handles empty heritage array', async () => {
-    await processHeritageFromExtracted(graph, [], symbolTable);
+    await processHeritageFromExtracted(graph, [], symbolTable, importMap);
     expect(graph.relationshipCount).toBe(0);
   });
 });

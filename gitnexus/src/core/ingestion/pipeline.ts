@@ -221,7 +221,7 @@ export const runPipelineFromRepo = async (
           }
           // Heritage — resolve immediately, then free
           if (chunkWorkerData.heritage.length > 0) {
-            await processHeritageFromExtracted(graph, chunkWorkerData.heritage, symbolTable);
+            await processHeritageFromExtracted(graph, chunkWorkerData.heritage, symbolTable, importMap);
           }
           // Routes — resolve immediately (Laravel route→controller CALLS edges)
           if (chunkWorkerData.routes && chunkWorkerData.routes.length > 0) {
@@ -250,7 +250,7 @@ export const runPipelineFromRepo = async (
         .map(p => ({ path: p, content: chunkContents.get(p)! }));
       astCache = createASTCache(chunkFiles.length);
       await processCalls(graph, chunkFiles, astCache, symbolTable, importMap);
-      await processHeritage(graph, chunkFiles, astCache, symbolTable);
+      await processHeritage(graph, chunkFiles, astCache, symbolTable, importMap);
       astCache.clear();
     }
 
