@@ -20,7 +20,7 @@ import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from '../constants.js
 const _require = createRequire(import.meta.url);
 let Swift: any = null;
 try { Swift = _require('tree-sitter-swift'); } catch {}
-import { findSiblingChild, getLanguageFromFilename, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures } from '../utils.js';
+import { findSiblingChild, getLanguageFromFilename, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature } from '../utils.js';
 import { isNodeExported } from '../export-detection.js';
 import { detectFrameworkFromAST } from '../framework-detection.js';
 import { generateId } from '../../../lib/utils.js';
@@ -42,6 +42,8 @@ interface ParsedNode {
     astFrameworkMultiplier?: number;
     astFrameworkReason?: string;
     description?: string;
+    parameterCount?: number;
+    returnType?: string;
   };
 }
 
@@ -49,7 +51,7 @@ interface ParsedRelationship {
   id: string;
   sourceId: string;
   targetId: string;
-  type: 'DEFINES';
+  type: 'DEFINES' | 'HAS_METHOD';
   confidence: number;
   reason: string;
 }
@@ -903,6 +905,14 @@ const processFileGroup = (
         ? detectFrameworkFromAST(language, (definitionNode.text || '').slice(0, 300))
         : null;
 
+      let parameterCount: number | undefined;
+      let returnType: string | undefined;
+      if (nodeLabel === 'Method' || nodeLabel === 'Constructor') {
+        const sig = extractMethodSignature(definitionNode);
+        parameterCount = sig.parameterCount;
+        returnType = sig.returnType;
+      }
+
       result.nodes.push({
         id: nodeId,
         label: nodeLabel,
@@ -918,6 +928,8 @@ const processFileGroup = (
             astFrameworkReason: frameworkHint.reason,
           } : {}),
           ...(description !== undefined ? { description } : {}),
+          ...(parameterCount !== undefined ? { parameterCount } : {}),
+          ...(returnType !== undefined ? { returnType } : {}),
         },
       });
 
@@ -938,6 +950,21 @@ const processFileGroup = (
         confidence: 1.0,
         reason: '',
       });
+
+      // ── HAS_METHOD: link method/constructor/property to enclosing class ──
+      if (nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property') {
+        const enclosingClassId = findEnclosingClassId(nameNode || definitionNode, file.path);
+        if (enclosingClassId) {
+          result.relationships.push({
+            id: generateId('HAS_METHOD', `${enclosingClassId}->${nodeId}`),
+            sourceId: enclosingClassId,
+            targetId: nodeId,
+            type: 'HAS_METHOD',
+            confidence: 1.0,
+            reason: '',
+          });
+        }
+      }
     }
 
     // Extract Laravel routes from route files via procedural AST walk

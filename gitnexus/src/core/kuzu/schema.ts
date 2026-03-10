@@ -26,7 +26,7 @@ export type NodeTableName = typeof NODE_TABLES[number];
 export const REL_TABLE_NAME = 'CodeRelation';
 
 // Valid relation types
-export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'MEMBER_OF', 'STEP_IN_PROCESS'] as const;
+export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'HAS_METHOD', 'OVERRIDES', 'MEMBER_OF', 'STEP_IN_PROCESS'] as const;
 export type RelType = typeof REL_TYPES[number];
 
 // ============================================================================
@@ -104,6 +104,8 @@ CREATE NODE TABLE Method (
   isExported BOOLEAN,
   content STRING,
   description STRING,
+  parameterCount INT32,
+  returnType STRING,
   PRIMARY KEY (id)
 )`;
 

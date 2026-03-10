@@ -105,6 +105,115 @@ describe('processHeritageFromExtracted', () => {
     });
   });
 
+  describe('C# interface resolution from extends captures', () => {
+    it('emits IMPLEMENTS when parent is an Interface in symbol table', async () => {
+      symbolTable.add('src/Service.cs', 'UserService', 'Class:src/Service.cs:UserService', 'Class');
+      symbolTable.add('src/IService.cs', 'IService', 'Interface:src/IService.cs:IService', 'Interface');
+
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Service.cs',
+        className: 'UserService',
+        parentName: 'IService',
+        kind: 'extends', // C# base_list always sends extends
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable);
+
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      expect(impls).toHaveLength(1);
+      expect(exts).toHaveLength(0);
+      expect(impls[0].sourceId).toBe('Class:src/Service.cs:UserService');
+      expect(impls[0].targetId).toBe('Interface:src/IService.cs:IService');
+    });
+
+    it('emits EXTENDS when parent is a Class in symbol table', async () => {
+      symbolTable.add('src/Admin.cs', 'AdminUser', 'Class:src/Admin.cs:AdminUser', 'Class');
+      symbolTable.add('src/User.cs', 'User', 'Class:src/User.cs:User', 'Class');
+
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Admin.cs',
+        className: 'AdminUser',
+        parentName: 'User',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable);
+
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      expect(exts).toHaveLength(1);
+      expect(impls).toHaveLength(0);
+    });
+
+    it('uses I[A-Z] heuristic for unresolved interface names', async () => {
+      // IDisposable is not in symbol table (external .NET type)
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Resource.cs',
+        className: 'Resource',
+        parentName: 'IDisposable',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable);
+
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      expect(impls).toHaveLength(1);
+      expect(impls[0].targetId).toContain('IDisposable');
+    });
+
+    it('does not misclassify non-I-prefixed unresolved names as interfaces', async () => {
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Derived.cs',
+        className: 'Derived',
+        parentName: 'BaseClass',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable);
+
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      expect(exts).toHaveLength(1);
+      expect(impls).toHaveLength(0);
+    });
+
+    it('does not match single-letter I names like "I" or "Id"', async () => {
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Thing.cs',
+        className: 'Thing',
+        parentName: 'Id',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable);
+
+      // "Id" starts with I but second char is lowercase — should be EXTENDS
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      expect(exts).toHaveLength(1);
+    });
+
+    it('handles mixed class + interface base_list from C#', async () => {
+      symbolTable.add('src/Repo.cs', 'UserRepo', 'Class:src/Repo.cs:UserRepo', 'Class');
+      symbolTable.add('src/Base.cs', 'BaseRepository', 'Class:src/Base.cs:BaseRepository', 'Class');
+      symbolTable.add('src/IRepo.cs', 'IRepository', 'Interface:src/IRepo.cs:IRepository', 'Interface');
+      symbolTable.add('src/IDisp.cs', 'IDisposable', 'Interface:src/IDisp.cs:IDisposable', 'Interface');
+
+      const heritage: ExtractedHeritage[] = [
+        { filePath: 'src/Repo.cs', className: 'UserRepo', parentName: 'BaseRepository', kind: 'extends' },
+        { filePath: 'src/Repo.cs', className: 'UserRepo', parentName: 'IRepository', kind: 'extends' },
+        { filePath: 'src/Repo.cs', className: 'UserRepo', parentName: 'IDisposable', kind: 'extends' },
+      ];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable);
+
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      expect(exts).toHaveLength(1); // BaseRepository
+      expect(impls).toHaveLength(2); // IRepository + IDisposable
+    });
+  });
+
   it('handles multiple heritage entries', async () => {
     const heritage: ExtractedHeritage[] = [
       { filePath: 'src/a.ts', className: 'A', parentName: 'B', kind: 'extends' },

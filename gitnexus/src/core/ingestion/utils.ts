@@ -1,4 +1,5 @@
 import { SupportedLanguages } from '../../config/supported-languages.js';
+import { generateId } from '../../lib/utils.js';
 
 /**
  * Ordered list of definition capture keys for tree-sitter query matches.
@@ -236,6 +237,51 @@ export const BUILT_IN_NAMES = new Set([
 /** Check if a name is a built-in function or common noise that should be filtered out */
 export const isBuiltInOrNoise = (name: string): boolean => BUILT_IN_NAMES.has(name);
 
+/** AST node types that represent a class-like container (for HAS_METHOD edge extraction) */
+export const CLASS_CONTAINER_TYPES = new Set([
+  'class_declaration', 'abstract_class_declaration',
+  'interface_declaration', 'struct_declaration', 'record_declaration',
+  'class_specifier', 'struct_specifier',
+  'impl_item', 'trait_item',
+  'class_definition',
+  'trait_declaration',
+  'protocol_declaration',
+]);
+
+export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
+  class_declaration: 'Class',
+  abstract_class_declaration: 'Class',
+  interface_declaration: 'Interface',
+  struct_declaration: 'Struct',
+  struct_specifier: 'Struct',
+  class_specifier: 'Class',
+  class_definition: 'Class',
+  impl_item: 'Impl',
+  trait_item: 'Trait',
+  trait_declaration: 'Trait',
+  record_declaration: 'Record',
+  protocol_declaration: 'Interface',
+};
+
+/** Walk up AST to find enclosing class/struct/interface/impl, return its generateId or null. */
+export const findEnclosingClassId = (node: any, filePath: string): string | null => {
+  let current = node.parent;
+  while (current) {
+    if (CLASS_CONTAINER_TYPES.has(current.type)) {
+      const nameNode = current.childForFieldName?.('name')
+        ?? current.children?.find((c: any) =>
+          c.type === 'type_identifier' || c.type === 'identifier' || c.type === 'name'
+        );
+      if (nameNode) {
+        const label = CONTAINER_TYPE_TO_LABEL[current.type] || 'Class';
+        return generateId(label, `${filePath}:${nameNode.text}`);
+      }
+    }
+    current = current.parent;
+  }
+  return null;
+};
+
 /**
  * Extract function name and label from a function_definition or similar AST node.
  * Handles C/C++ qualified_identifier (ClassName::MethodName) and other language patterns.
@@ -388,6 +434,51 @@ export const getLanguageFromFilename = (filename: string): SupportedLanguages | 
   }
   if (filename.endsWith('.swift')) return SupportedLanguages.Swift;
   return null;
+};
+
+export interface MethodSignature {
+  parameterCount: number;
+  returnType: string | undefined;
+}
+
+/**
+ * Extract parameter count and return type text from an AST method/function node.
+ * Works across languages by looking for common AST patterns.
+ */
+export const extractMethodSignature = (node: any): MethodSignature => {
+  let parameterCount = 0;
+  let returnType: string | undefined;
+
+  if (!node) return { parameterCount, returnType };
+
+  const paramListTypes = new Set([
+    'formal_parameters', 'parameters', 'parameter_list',
+    'function_parameters', 'method_parameters',
+  ]);
+
+  for (const child of node.children ?? []) {
+    if (paramListTypes.has(child.type)) {
+      for (const param of child.children ?? []) {
+        if (param.type !== ',' && param.type !== '(' && param.type !== ')' &&
+            param.type !== 'comment' && param.isNamed) {
+          // Skip 'self' / 'this' parameters
+          if (param.text === 'self' || param.text === '&self' || param.text === '&mut self' ||
+              param.type === 'self_parameter') continue;
+          parameterCount++;
+        }
+      }
+      break;
+    }
+  }
+
+  for (const child of node.children ?? []) {
+    if (child.type === 'type_annotation' || child.type === 'return_type') {
+      const typeNode = child.children?.find((c: any) => c.isNamed);
+      if (typeNode) returnType = typeNode.text;
+    }
+  }
+
+  return { parameterCount, returnType };
 };
 
 export const isVerboseIngestionEnabled = (): boolean => {

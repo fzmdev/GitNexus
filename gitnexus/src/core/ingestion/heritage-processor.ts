@@ -1,14 +1,19 @@
 /**
  * Heritage Processor
- * 
+ *
  * Extracts class inheritance relationships:
- * - EXTENDS: Class extends another Class (TS, JS, Python)
- * - IMPLEMENTS: Class implements an Interface (TS only)
+ * - EXTENDS: Class extends another Class (TS, JS, Python, C#, C++)
+ * - IMPLEMENTS: Class implements an Interface (TS, C#, Java, Kotlin, PHP)
+ *
+ * Languages like C# use a single `base_list` for both class and interface parents.
+ * We resolve the correct edge type by checking the symbol table: if the parent is
+ * registered as an Interface, we emit IMPLEMENTS; otherwise EXTENDS. For unresolved
+ * external symbols, we fall back to the C#/Java `I[A-Z]` naming convention heuristic.
  */
 
 import { KnowledgeGraph } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
-import { SymbolTable } from './symbol-table.js';
+import { SymbolTable, SymbolDefinition } from './symbol-table.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
@@ -16,6 +21,32 @@ import { generateId } from '../../lib/utils.js';
 import { getLanguageFromFilename, isVerboseIngestionEnabled, yieldToEventLoop } from './utils.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
+
+/** C#/Java convention: interfaces start with I followed by uppercase letter */
+const INTERFACE_NAME_RE = /^I[A-Z]/;
+
+/**
+ * Determine whether a heritage.extends capture is actually an IMPLEMENTS relationship.
+ * Uses the symbol table first (authoritative); falls back to naming convention for
+ * external symbols not present in the graph.
+ */
+const resolveExtendsType = (
+  parentName: string,
+  symbolTable: SymbolTable,
+): { type: 'EXTENDS' | 'IMPLEMENTS'; idPrefix: string } => {
+  const defs: SymbolDefinition[] = symbolTable.lookupFuzzy(parentName);
+  if (defs.length > 0) {
+    const isInterface = defs[0].type === 'Interface';
+    return isInterface
+      ? { type: 'IMPLEMENTS', idPrefix: 'Interface' }
+      : { type: 'EXTENDS', idPrefix: 'Class' };
+  }
+  // Unresolved symbol — fall back to naming convention heuristic
+  if (INTERFACE_NAME_RE.test(parentName)) {
+    return { type: 'IMPLEMENTS', idPrefix: 'Interface' };
+  }
+  return { type: 'EXTENDS', idPrefix: 'Class' };
+};
 
 export const processHeritage = async (
   graph: KnowledgeGraph,
@@ -84,27 +115,27 @@ export const processHeritage = async (
         captureMap[c.name] = c.node;
       });
 
-      // EXTENDS: Class extends another Class
+      // EXTENDS or IMPLEMENTS: resolve via symbol table for languages where
+      // the tree-sitter query can't distinguish classes from interfaces (C#, Java)
       if (captureMap['heritage.class'] && captureMap['heritage.extends']) {
         const className = captureMap['heritage.class'].text;
         const parentClassName = captureMap['heritage.extends'].text;
 
-        // Resolve both class IDs
+        const { type: relType, idPrefix } = resolveExtendsType(parentClassName, symbolTable);
+
         const childId = symbolTable.lookupExact(file.path, className) ||
                         symbolTable.lookupFuzzy(className)[0]?.nodeId ||
                         generateId('Class', `${file.path}:${className}`);
-        
+
         const parentId = symbolTable.lookupFuzzy(parentClassName)[0]?.nodeId ||
-                         generateId('Class', `${parentClassName}`);
+                         generateId(idPrefix, `${parentClassName}`);
 
         if (childId && parentId && childId !== parentId) {
-          const relId = generateId('EXTENDS', `${childId}->${parentId}`);
-          
           graph.addRelationship({
-            id: relId,
+            id: generateId(relType, `${childId}->${parentId}`),
             sourceId: childId,
             targetId: parentId,
-            type: 'EXTENDS',
+            type: relType,
             confidence: 1.0,
             reason: '',
           });
@@ -199,19 +230,21 @@ export const processHeritageFromExtracted = async (
     const h = extractedHeritage[i];
 
     if (h.kind === 'extends') {
+      const { type: relType, idPrefix } = resolveExtendsType(h.parentName, symbolTable);
+
       const childId = symbolTable.lookupExact(h.filePath, h.className) ||
                       symbolTable.lookupFuzzy(h.className)[0]?.nodeId ||
                       generateId('Class', `${h.filePath}:${h.className}`);
 
       const parentId = symbolTable.lookupFuzzy(h.parentName)[0]?.nodeId ||
-                       generateId('Class', `${h.parentName}`);
+                       generateId(idPrefix, `${h.parentName}`);
 
       if (childId && parentId && childId !== parentId) {
         graph.addRelationship({
-          id: generateId('EXTENDS', `${childId}->${parentId}`),
+          id: generateId(relType, `${childId}->${parentId}`),
           sourceId: childId,
           targetId: parentId,
-          type: 'EXTENDS',
+          type: relType,
           confidence: 1.0,
           reason: '',
         });

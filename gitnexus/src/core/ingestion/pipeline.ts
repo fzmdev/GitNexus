@@ -4,6 +4,7 @@ import { processParsing } from './parsing-processor.js';
 import { processImports, processImportsFromExtracted, createImportMap, buildImportResolutionContext } from './import-processor.js';
 import { processCalls, processCallsFromExtracted, processRoutesFromExtracted } from './call-processor.js';
 import { processHeritage, processHeritageFromExtracted } from './heritage-processor.js';
+import { computeMRO } from './mro-processor.js';
 import { processCommunities } from './community-processor.js';
 import { processProcesses } from './process-processor.js';
 import { createSymbolTable } from './symbol-table.js';
@@ -260,12 +261,17 @@ export const runPipelineFromRepo = async (
     (importCtx as any).suffixIndex = null;
     (importCtx as any).normalizedFileList = null;
 
-    if (isDev) {
-      let importsCount = 0;
-      for (const r of graph.iterRelationships()) {
-        if (r.type === 'IMPORTS') importsCount++;
-      }
-      console.log(`📊 Pipeline: graph has ${importsCount} IMPORTS, ${graph.relationshipCount} total relationships`);
+    // ── Phase 4.5: Method Resolution Order ──────────────────────────────
+    onProgress({
+      phase: 'parsing',
+      percent: 81,
+      message: 'Computing method resolution order...',
+      stats: { filesProcessed: totalFiles, totalFiles, nodesCreated: graph.nodeCount },
+    });
+
+    const mroResult = computeMRO(graph);
+    if (isDev && mroResult.entries.length > 0) {
+      console.log(`🔀 MRO: ${mroResult.entries.length} classes analyzed, ${mroResult.ambiguityCount} ambiguities found, ${mroResult.overrideEdges} OVERRIDES edges`);
     }
 
     // ── Phase 5: Communities ───────────────────────────────────────────
