@@ -558,9 +558,46 @@ const resolveImportPath = (
 
   // ---- Rust: convert module path syntax to file paths ----
   if (language === SupportedLanguages.Rust) {
-    const rustResult = resolveRustImport(currentFile, importPath, allFiles);
+    // Handle grouped imports: use crate::module::{Foo, Bar, Baz}
+    // Extract the prefix path before ::{...} and resolve the module, not the symbols
+    let rustImportPath = importPath;
+    const braceIdx = importPath.indexOf('::{');
+    if (braceIdx !== -1) {
+      rustImportPath = importPath.substring(0, braceIdx);
+    } else if (importPath.includes('{')) {
+      // Handle cases like use {crate::a, crate::b} — skip, too complex for single resolution
+      return cache(null);
+    }
+
+    const rustResult = resolveRustImport(currentFile, rustImportPath, allFiles);
     if (rustResult) return cache(rustResult);
     // Fall through to generic resolution if Rust-specific didn't match
+  }
+
+  // ---- Python relative imports (PEP 328): .module, ..module, ... ----
+  if (language === SupportedLanguages.Python && importPath.startsWith('.')) {
+    const dotMatch = importPath.match(/^(\.+)(.*)/);
+    if (dotMatch) {
+      const dotCount = dotMatch[1].length;
+      const modulePart = dotMatch[2]; // e.g., "models" from ".models"
+      const dirParts = currentFile.split('/').slice(0, -1); // remove filename
+
+      // Navigate up: 1 dot = same package, 2 dots = parent package, etc.
+      // First dot means "current package", each additional dot goes up one level
+      for (let i = 1; i < dotCount; i++) {
+        dirParts.pop();
+      }
+
+      if (modulePart) {
+        // from .models import User → resolve "models" relative to current package
+        const modulePath = modulePart.replace(/\./g, '/');
+        dirParts.push(...modulePath.split('/'));
+      }
+
+      const basePath = dirParts.join('/');
+      const resolved = tryResolveWithExtensions(basePath, allFiles);
+      return cache(resolved);
+    }
   }
 
   // ---- Generic relative import resolution (./ and ../) ----
@@ -1069,11 +1106,11 @@ export const processImports = async (
           // Resolve to the module's source directory → all .swift files in it
           const targetDir = swiftPackageConfig.targets.get(rawImportPath);
           if (targetDir) {
-            // Find all .swift files in this target directory
+            // Find all .swift files in this target directory (use normalizedFileList for Windows compat)
             const dirPrefix = targetDir + '/';
-            for (const filePath2 of allFileList) {
-              if (filePath2.startsWith(dirPrefix) && filePath2.endsWith('.swift')) {
-                addImportEdge(file.path, filePath2);
+            for (let i = 0; i < normalizedFileList.length; i++) {
+              if (normalizedFileList[i].startsWith(dirPrefix) && normalizedFileList[i].endsWith('.swift')) {
+                addImportEdge(file.path, allFileList[i]);
               }
             }
             return;
@@ -1274,14 +1311,14 @@ export const processImportsFromExtracted = async (
         continue;
       }
 
-      // Swift: handle module imports
+      // Swift: handle module imports (use normalizedFileList for Windows compat)
       if (language === SupportedLanguages.Swift && swiftPackageConfig) {
         const targetDir = swiftPackageConfig.targets.get(rawImportPath);
         if (targetDir) {
           const dirPrefix = targetDir + '/';
-          for (const fp of allFileList) {
-            if (fp.startsWith(dirPrefix) && fp.endsWith('.swift')) {
-              addImportEdge(filePath, fp);
+          for (let i = 0; i < normalizedFileList.length; i++) {
+            if (normalizedFileList[i].startsWith(dirPrefix) && normalizedFileList[i].endsWith('.swift')) {
+              addImportEdge(filePath, allFileList[i]);
             }
           }
         }

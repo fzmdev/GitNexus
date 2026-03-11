@@ -333,7 +333,7 @@ export function computeMRO(graph: KnowledgeGraph): MROResult {
     const ambiguities: MethodAmbiguity[] = [];
 
     // Compute transitive edge types once per class (only needed for C#/Java)
-    const needsEdgeTypes = language === 'c_sharp' || language === 'java';
+    const needsEdgeTypes = language === 'csharp' || language === 'java' || language === 'kotlin';
     const classEdgeTypes = needsEdgeTypes
       ? buildTransitiveEdgeTypes(classId, parentMap, parentEdgeType)
       : undefined;
@@ -355,8 +355,9 @@ export function computeMRO(graph: KnowledgeGraph): MROResult {
         case 'cpp':
           resolution = resolveByMroOrder(methodName, defs, mroOrder, 'C++ leftmost base');
           break;
-        case 'c_sharp':
+        case 'csharp':
         case 'java':
+        case 'kotlin':
           resolution = resolveCsharpJava(methodName, defs, classEdgeTypes);
           break;
         case 'python':

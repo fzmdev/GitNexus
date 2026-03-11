@@ -134,6 +134,9 @@ export const PYTHON_QUERIES = `
 (import_from_statement
   module_name: (dotted_name) @import.source) @import
 
+(import_from_statement
+  module_name: (relative_import) @import.source) @import
+
 (call
   function: (identifier) @call.name) @call
 

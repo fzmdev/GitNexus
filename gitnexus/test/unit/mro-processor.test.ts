@@ -142,9 +142,9 @@ describe('computeMRO', () => {
   describe('C# class + interface', () => {
     it('class method beats interface default', () => {
       const graph = createKnowledgeGraph();
-      const classId = addClass(graph, 'MyClass', 'c_sharp');
-      const baseId = addClass(graph, 'BaseClass', 'c_sharp');
-      const ifaceId = addClass(graph, 'IDoSomething', 'c_sharp', 'Interface');
+      const classId = addClass(graph, 'MyClass', 'csharp');
+      const baseId = addClass(graph, 'BaseClass', 'csharp');
+      const ifaceId = addClass(graph, 'IDoSomething', 'csharp', 'Interface');
 
       addExtends(graph, 'MyClass', 'BaseClass');
       addImplements(graph, 'MyClass', 'IDoSomething');
@@ -166,9 +166,9 @@ describe('computeMRO', () => {
 
     it('multiple interface methods with same name are ambiguous', () => {
       const graph = createKnowledgeGraph();
-      addClass(graph, 'MyClass', 'c_sharp');
-      addClass(graph, 'IFoo', 'c_sharp', 'Interface');
-      addClass(graph, 'IBar', 'c_sharp', 'Interface');
+      addClass(graph, 'MyClass', 'csharp');
+      addClass(graph, 'IFoo', 'csharp', 'Interface');
+      addClass(graph, 'IBar', 'csharp', 'Interface');
 
       addImplements(graph, 'MyClass', 'IFoo');
       addImplements(graph, 'MyClass', 'IBar');
