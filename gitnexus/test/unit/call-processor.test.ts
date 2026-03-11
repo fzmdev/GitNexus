@@ -53,7 +53,7 @@ describe('processCallsFromExtracted', () => {
     expect(rels[0].reason).toBe('import-resolved');
   });
 
-  it('uses fuzzy-global with higher confidence for unique symbols', async () => {
+  it('resolves unique global symbol with moderate confidence', async () => {
     symbolTable.add('src/other.ts', 'uniqueFunc', 'Function:src/other.ts:uniqueFunc', 'Function');
 
     const calls: ExtractedCall[] = [{
@@ -67,10 +67,10 @@ describe('processCallsFromExtracted', () => {
     const rels = graph.relationships.filter(r => r.type === 'CALLS');
     expect(rels).toHaveLength(1);
     expect(rels[0].confidence).toBe(0.5);
-    expect(rels[0].reason).toBe('fuzzy-global');
+    expect(rels[0].reason).toBe('unique-global');
   });
 
-  it('uses lower confidence for ambiguous fuzzy-global symbols', async () => {
+  it('refuses ambiguous global symbols — no CALLS edge created', async () => {
     symbolTable.add('src/a.ts', 'render', 'Function:src/a.ts:render', 'Function');
     symbolTable.add('src/b.ts', 'render', 'Function:src/b.ts:render', 'Function');
 
@@ -82,9 +82,9 @@ describe('processCallsFromExtracted', () => {
 
     await processCallsFromExtracted(graph, calls, symbolTable, importMap);
 
+    // Ambiguous matches are refused — a wrong edge is worse than no edge
     const rels = graph.relationships.filter(r => r.type === 'CALLS');
-    expect(rels).toHaveLength(1);
-    expect(rels[0].confidence).toBe(0.3);
+    expect(rels).toHaveLength(0);
   });
 
   it('skips unresolvable calls', async () => {

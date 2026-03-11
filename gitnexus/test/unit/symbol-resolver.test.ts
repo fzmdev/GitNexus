@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { resolveSymbol } from '../../src/core/ingestion/symbol-resolver.js';
+import { resolveSymbol, resolveSymbolInternal } from '../../src/core/ingestion/symbol-resolver.js';
 import { createSymbolTable } from '../../src/core/ingestion/symbol-table.js';
 import { createImportMap } from '../../src/core/ingestion/import-processor.js';
 import type { ImportMap } from '../../src/core/ingestion/import-processor.js';
@@ -60,19 +60,19 @@ describe('resolveSymbol', () => {
       expect(result!.filePath).toBe('src/services/logger.ts');
     });
 
-    it('handles file with no imports', () => {
+    it('handles file with no imports — unique global falls through', () => {
       symbolTable.add('src/utils.ts', 'Helper', 'Class:src/utils.ts:Helper', 'Class');
 
       const result = resolveSymbol('Helper', 'src/app.ts', symbolTable, importMap);
 
-      // Falls through to Tier 3 (fuzzy global)
+      // Falls through to Tier 3 (unique global)
       expect(result).not.toBeNull();
       expect(result!.nodeId).toBe('Class:src/utils.ts:Helper');
     });
   });
 
-  describe('Tier 3: Fuzzy global resolution', () => {
-    it('falls back to global when not in imports', () => {
+  describe('Tier 3: Unique global resolution', () => {
+    it('resolves unique global when not in imports', () => {
       symbolTable.add('src/external/base.ts', 'BaseModel', 'Class:src/external/base.ts:BaseModel', 'Class');
       importMap.set('src/app.ts', new Set(['src/other.ts']));
 
@@ -82,14 +82,14 @@ describe('resolveSymbol', () => {
       expect(result!.nodeId).toBe('Class:src/external/base.ts:BaseModel');
     });
 
-    it('returns first definition when multiple exist globally', () => {
+    it('refuses ambiguous global — returns null when multiple candidates exist', () => {
       symbolTable.add('src/a.ts', 'Config', 'Class:src/a.ts:Config', 'Class');
       symbolTable.add('src/b.ts', 'Config', 'Class:src/b.ts:Config', 'Class');
 
       const result = resolveSymbol('Config', 'src/other.ts', symbolTable, importMap);
 
-      expect(result).not.toBeNull();
-      expect(result!.nodeId).toBe('Class:src/a.ts:Config');
+      // A wrong edge is worse than no edge
+      expect(result).toBeNull();
     });
   });
 
@@ -150,8 +150,148 @@ describe('resolveSymbol', () => {
   });
 });
 
+describe('resolveSymbolInternal — tier metadata', () => {
+  let symbolTable: ReturnType<typeof createSymbolTable>;
+  let importMap: ImportMap;
+
+  beforeEach(() => {
+    symbolTable = createSymbolTable();
+    importMap = createImportMap();
+  });
+
+  it('returns same-file tier for Tier 1 match', () => {
+    symbolTable.add('src/a.ts', 'Foo', 'Class:src/a.ts:Foo', 'Class');
+
+    const result = resolveSymbolInternal('Foo', 'src/a.ts', symbolTable, importMap);
+
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('same-file');
+    expect(result!.candidateCount).toBe(1);
+    expect(result!.definition.nodeId).toBe('Class:src/a.ts:Foo');
+  });
+
+  it('returns import-scoped tier for Tier 2 match', () => {
+    symbolTable.add('src/logger.ts', 'Logger', 'Class:src/logger.ts:Logger', 'Class');
+    symbolTable.add('src/mock.ts', 'Logger', 'Class:src/mock.ts:Logger', 'Class');
+    importMap.set('src/app.ts', new Set(['src/logger.ts']));
+
+    const result = resolveSymbolInternal('Logger', 'src/app.ts', symbolTable, importMap);
+
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('import-scoped');
+    expect(result!.candidateCount).toBe(2);
+    expect(result!.definition.filePath).toBe('src/logger.ts');
+  });
+
+  it('returns unique-global tier for Tier 3 match', () => {
+    symbolTable.add('src/only.ts', 'Singleton', 'Class:src/only.ts:Singleton', 'Class');
+
+    const result = resolveSymbolInternal('Singleton', 'src/other.ts', symbolTable, importMap);
+
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('unique-global');
+    expect(result!.candidateCount).toBe(1);
+  });
+
+  it('returns null for ambiguous global — refuses to guess', () => {
+    symbolTable.add('src/a.ts', 'Config', 'Class:src/a.ts:Config', 'Class');
+    symbolTable.add('src/b.ts', 'Config', 'Class:src/b.ts:Config', 'Class');
+
+    const result = resolveSymbolInternal('Config', 'src/other.ts', symbolTable, importMap);
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null for unknown symbol', () => {
+    const result = resolveSymbolInternal('Ghost', 'src/any.ts', symbolTable, importMap);
+    expect(result).toBeNull();
+  });
+
+  it('Tier 1 wins over Tier 2 — same-file takes priority', () => {
+    symbolTable.add('src/app.ts', 'Util', 'Function:src/app.ts:Util', 'Function');
+    symbolTable.add('src/lib.ts', 'Util', 'Function:src/lib.ts:Util', 'Function');
+    importMap.set('src/app.ts', new Set(['src/lib.ts']));
+
+    const result = resolveSymbolInternal('Util', 'src/app.ts', symbolTable, importMap);
+
+    expect(result!.tier).toBe('same-file');
+    expect(result!.definition.filePath).toBe('src/app.ts');
+  });
+});
+
+describe('negative tests — ambiguous refusal per language family', () => {
+  let symbolTable: ReturnType<typeof createSymbolTable>;
+  let importMap: ImportMap;
+
+  beforeEach(() => {
+    symbolTable = createSymbolTable();
+    importMap = createImportMap();
+  });
+
+  it('TS/JS: two Logger definitions with no import → returns null', () => {
+    symbolTable.add('src/services/logger.ts', 'Logger', 'Class:src/services/logger.ts:Logger', 'Class');
+    symbolTable.add('src/testing/logger.ts', 'Logger', 'Class:src/testing/logger.ts:Logger', 'Class');
+
+    const result = resolveSymbol('Logger', 'src/app.ts', symbolTable, importMap);
+    expect(result).toBeNull();
+  });
+
+  it('Java: same-named class in different packages, no import → returns null', () => {
+    symbolTable.add('com/example/models/User.java', 'User', 'Class:com/example/models/User.java:User', 'Class');
+    symbolTable.add('com/example/dto/User.java', 'User', 'Class:com/example/dto/User.java:User', 'Class');
+
+    const result = resolveSymbol('User', 'com/example/services/UserService.java', symbolTable, importMap);
+    expect(result).toBeNull();
+  });
+
+  it('C/C++: type defined in transitively-included header → returns null (not reachable via direct import)', () => {
+    // a.c includes b.h (direct), b.h includes c.h (transitive — not in ImportMap)
+    symbolTable.add('src/c.h', 'Widget', 'Struct:src/c.h:Widget', 'Struct');
+    symbolTable.add('src/d.h', 'Widget', 'Struct:src/d.h:Widget', 'Struct');
+    importMap.set('src/a.c', new Set(['src/b.h']));
+
+    const result = resolveSymbol('Widget', 'src/a.c', symbolTable, importMap);
+    // Neither c.h nor d.h is directly imported → ambiguous global → null
+    expect(result).toBeNull();
+  });
+
+  it('C#: two IService interfaces in different namespaces, no import → returns null', () => {
+    symbolTable.add('src/Services/IService.cs', 'IService', 'Interface:src/Services/IService.cs:IService', 'Interface');
+    symbolTable.add('src/Testing/IService.cs', 'IService', 'Interface:src/Testing/IService.cs:IService', 'Interface');
+
+    const result = resolveSymbol('IService', 'src/App.cs', symbolTable, importMap);
+    expect(result).toBeNull();
+  });
+});
+
+describe('heritage false-positive guard', () => {
+  let symbolTable: ReturnType<typeof createSymbolTable>;
+  let importMap: ImportMap;
+
+  beforeEach(() => {
+    symbolTable = createSymbolTable();
+    importMap = createImportMap();
+  });
+
+  it('null from resolveSymbol prevents false edge — generateId fallback produces synthetic ID, not wrong match', () => {
+    // Two BaseController in different files — ambiguous
+    symbolTable.add('src/api/base.ts', 'BaseController', 'Class:src/api/base.ts:BaseController', 'Class');
+    symbolTable.add('src/testing/base.ts', 'BaseController', 'Class:src/testing/base.ts:BaseController', 'Class');
+
+    // resolveSymbol returns null — heritage-processor would use generateId fallback
+    const result = resolveSymbol('BaseController', 'src/routes/admin.ts', symbolTable, importMap);
+    expect(result).toBeNull();
+
+    // Verify: with import, it resolves correctly to the right one
+    importMap.set('src/routes/admin.ts', new Set(['src/api/base.ts']));
+    const resolved = resolveSymbol('BaseController', 'src/routes/admin.ts', symbolTable, importMap);
+    expect(resolved).not.toBeNull();
+    expect(resolved!.filePath).toBe('src/api/base.ts');
+  });
+});
+
 describe('lookupExactFull', () => {
-  it('returns full SymbolDefinition for same-file lookup', () => {
+  it('returns full SymbolDefinition for same-file lookup via O(1) direct storage', () => {
     const symbolTable = createSymbolTable();
     symbolTable.add('src/models/user.ts', 'User', 'Class:src/models/user.ts:User', 'Class');
 
@@ -175,5 +315,16 @@ describe('lookupExactFull', () => {
 
     const result = symbolTable.lookupExactFull('src/b.ts', 'Foo');
     expect(result).toBeUndefined();
+  });
+
+  it('shares same object reference between fileIndex and globalIndex', () => {
+    const symbolTable = createSymbolTable();
+    symbolTable.add('src/x.ts', 'Bar', 'Class:src/x.ts:Bar', 'Class');
+
+    const fromExact = symbolTable.lookupExactFull('src/x.ts', 'Bar');
+    const fromFuzzy = symbolTable.lookupFuzzy('Bar')[0];
+
+    // Same object reference — zero additional memory
+    expect(fromExact).toBe(fromFuzzy);
   });
 });

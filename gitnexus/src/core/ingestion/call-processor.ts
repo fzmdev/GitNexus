@@ -197,10 +197,8 @@ const resolveCallTarget = (
   if (isImported) {
     return { nodeId: resolved.nodeId, confidence: 0.9, reason: 'import-resolved' };
   }
-  // Fuzzy global: confidence depends on how many competing definitions exist
-  const allDefs = symbolTable.lookupFuzzy(calledName);
-  const confidence = allDefs.length === 1 ? 0.5 : 0.3;
-  return { nodeId: resolved.nodeId, confidence, reason: 'fuzzy-global' };
+  // Unique global: resolveSymbol only returns here when exactly 1 candidate exists
+  return { nodeId: resolved.nodeId, confidence: 0.5, reason: 'unique-global' };
 };
 
 /**

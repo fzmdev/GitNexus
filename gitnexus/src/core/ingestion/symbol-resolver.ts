@@ -1,8 +1,8 @@
 /**
  * Symbol Resolver
  *
- * Scope-aware symbol resolution using import context and file locality.
- * Replaces raw lookupFuzzy(name)[0] with deterministic multi-tier resolution.
+ * Import-filtered candidate narrowing for bare identifier resolution.
+ * NOT FQN resolution — does not parse qualifiers (ns::Bar, com.foo.Bar).
  *
  * Shared between heritage-processor.ts and call-processor.ts.
  */
@@ -10,15 +10,26 @@
 import type { SymbolTable, SymbolDefinition } from './symbol-table.js';
 import type { ImportMap } from './import-processor.js';
 
+/** Resolution tier for internal tracking, logging, and test assertions. */
+export type ResolutionTier = 'same-file' | 'import-scoped' | 'unique-global';
+
+/** Internal resolution result preserving tier metadata. */
+export interface InternalResolution {
+  definition: SymbolDefinition;
+  tier: ResolutionTier;
+  candidateCount: number;
+}
+
 /**
- * Resolve a bare symbol name to its best-matching definition using scope context.
+ * Resolve a bare identifier to its best-matching definition using import context.
  *
  * Resolution tiers (highest confidence first):
  * 1. Same file (lookupExactFull — authoritative)
- * 2. Import-scoped (lookupFuzzy filtered by importMap — high confidence)
- * 3. Global fuzzy (lookupFuzzy, prefer unique match — low confidence)
+ * 2. Import-scoped (lookupFuzzy filtered by importMap — acceptable)
+ * 3. Unique global (lookupFuzzy with exactly 1 match — acceptable fallback)
  *
- * Returns the full SymbolDefinition (nodeId + filePath + type) or null.
+ * If multiple global candidates remain after filtering, returns null.
+ * A wrong edge is worse than no edge.
  */
 export const resolveSymbol = (
   name: string,
@@ -26,9 +37,19 @@ export const resolveSymbol = (
   symbolTable: SymbolTable,
   importMap: ImportMap,
 ): SymbolDefinition | null => {
+  return resolveSymbolInternal(name, currentFilePath, symbolTable, importMap)?.definition ?? null;
+};
+
+/** Internal resolver preserving tier metadata for logging and test assertions. */
+export const resolveSymbolInternal = (
+  name: string,
+  currentFilePath: string,
+  symbolTable: SymbolTable,
+  importMap: ImportMap,
+): InternalResolution | null => {
   // Tier 1: Same file — authoritative match
   const localDef = symbolTable.lookupExactFull(currentFilePath, name);
-  if (localDef) return localDef;
+  if (localDef) return { definition: localDef, tier: 'same-file', candidateCount: 1 };
 
   // Get all global definitions for subsequent tiers
   const allDefs = symbolTable.lookupFuzzy(name);
@@ -38,10 +59,18 @@ export const resolveSymbol = (
   const importedFiles = importMap.get(currentFilePath);
   if (importedFiles) {
     for (const def of allDefs) {
-      if (importedFiles.has(def.filePath)) return def;
+      if (importedFiles.has(def.filePath)) {
+        return { definition: def, tier: 'import-scoped', candidateCount: allDefs.length };
+      }
     }
   }
 
-  // Tier 3: Global fuzzy — first available definition
-  return allDefs[0];
+  // Tier 3: Unique global — ONLY if exactly one candidate exists
+  // Ambiguous global matches are refused. A wrong edge is worse than no edge.
+  if (allDefs.length === 1) {
+    return { definition: allDefs[0], tier: 'unique-global', candidateCount: 1 };
+  }
+
+  // Ambiguous: multiple global candidates, no import or same-file match → refuse
+  return null;
 };
