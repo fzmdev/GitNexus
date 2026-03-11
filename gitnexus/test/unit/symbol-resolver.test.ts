@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { resolveSymbol, resolveSymbolInternal } from '../../src/core/ingestion/symbol-resolver.js';
 import { createSymbolTable } from '../../src/core/ingestion/symbol-table.js';
-import { createImportMap, createPackageMap, isFileInGoPackage } from '../../src/core/ingestion/import-processor.js';
+import { createImportMap, createPackageMap, isFileInPackageDir } from '../../src/core/ingestion/import-processor.js';
 import type { ImportMap, PackageMap } from '../../src/core/ingestion/import-processor.js';
 
 describe('resolveSymbol', () => {
@@ -329,34 +329,38 @@ describe('lookupExactFull', () => {
   });
 });
 
-describe('isFileInGoPackage', () => {
-  it('matches .go file directly in the package directory', () => {
-    expect(isFileInGoPackage('internal/auth/handler.go', '/internal/auth/')).toBe(true);
+describe('isFileInPackageDir', () => {
+  it('matches file directly in the package directory', () => {
+    expect(isFileInPackageDir('internal/auth/handler.go', '/internal/auth/')).toBe(true);
   });
 
   it('matches with leading path segments', () => {
-    expect(isFileInGoPackage('myrepo/internal/auth/handler.go', '/internal/auth/')).toBe(true);
-    expect(isFileInGoPackage('src/github.com/user/repo/internal/auth/handler.go', '/internal/auth/')).toBe(true);
+    expect(isFileInPackageDir('myrepo/internal/auth/handler.go', '/internal/auth/')).toBe(true);
+    expect(isFileInPackageDir('src/github.com/user/repo/internal/auth/handler.go', '/internal/auth/')).toBe(true);
   });
 
   it('rejects files in subdirectories', () => {
-    expect(isFileInGoPackage('internal/auth/middleware/jwt.go', '/internal/auth/')).toBe(false);
+    expect(isFileInPackageDir('internal/auth/middleware/jwt.go', '/internal/auth/')).toBe(false);
   });
 
-  it('rejects non-.go files', () => {
-    expect(isFileInGoPackage('internal/auth/README.md', '/internal/auth/')).toBe(false);
-  });
-
-  it('rejects _test.go files', () => {
-    expect(isFileInGoPackage('internal/auth/handler_test.go', '/internal/auth/')).toBe(false);
+  it('matches any file extension in the directory', () => {
+    expect(isFileInPackageDir('internal/auth/README.md', '/internal/auth/')).toBe(true);
+    expect(isFileInPackageDir('Models/User.cs', '/Models/')).toBe(true);
+    expect(isFileInPackageDir('internal/auth/handler_test.go', '/internal/auth/')).toBe(true);
   });
 
   it('rejects files not in the package', () => {
-    expect(isFileInGoPackage('internal/db/connection.go', '/internal/auth/')).toBe(false);
+    expect(isFileInPackageDir('internal/db/connection.go', '/internal/auth/')).toBe(false);
   });
 
   it('handles backslash paths (Windows)', () => {
-    expect(isFileInGoPackage('internal\\auth\\handler.go', '/internal/auth/')).toBe(true);
+    expect(isFileInPackageDir('internal\\auth\\handler.go', '/internal/auth/')).toBe(true);
+  });
+
+  it('matches C# namespace directories', () => {
+    expect(isFileInPackageDir('MyProject/Models/User.cs', '/MyProject/Models/')).toBe(true);
+    expect(isFileInPackageDir('MyProject/Models/Order.cs', '/MyProject/Models/')).toBe(true);
+    expect(isFileInPackageDir('MyProject/Models/Sub/Nested.cs', '/MyProject/Models/')).toBe(false);
   });
 });
 

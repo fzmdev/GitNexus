@@ -9,7 +9,7 @@
 
 import type { SymbolTable, SymbolDefinition } from './symbol-table.js';
 import type { ImportMap, PackageMap } from './import-processor.js';
-import { isFileInGoPackage } from './import-processor.js';
+import { isFileInPackageDir } from './import-processor.js';
 
 /** Resolution tier for internal tracking, logging, and test assertions. */
 export type ResolutionTier = 'same-file' | 'import-scoped' | 'unique-global';
@@ -68,12 +68,13 @@ export const resolveSymbolInternal = (
     }
   }
 
-  // Tier 2b: Package-scoped — check if any definition is in a Go package imported by currentFile
+  // Tier 2b: Package-scoped — check if any definition is in a package/namespace dir imported by currentFile
+  // Used for Go packages and C# namespace imports to avoid ImportMap expansion bloat
   const importedPackages = packageMap?.get(currentFilePath);
   if (importedPackages) {
     for (const def of allDefs) {
-      for (const pkgSuffix of importedPackages) {
-        if (isFileInGoPackage(def.filePath, pkgSuffix)) {
+      for (const dirSuffix of importedPackages) {
+        if (isFileInPackageDir(def.filePath, dirSuffix)) {
           return { definition: def, tier: 'import-scoped', candidateCount: allDefs.length };
         }
       }
