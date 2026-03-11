@@ -53,6 +53,15 @@ describe('C++ diamond inheritance', () => {
     const methods = getNodesByLabel(result, 'Method');
     expect(methods).toEqual(['speak']);
   });
+
+  it('no OVERRIDES edges target Property nodes', () => {
+    const overrides = getRelationships(result, 'OVERRIDES');
+    for (const edge of overrides) {
+      const target = result.graph.getNode(edge.rel.targetId);
+      expect(target).toBeDefined();
+      expect(target!.label).not.toBe('Property');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -281,6 +281,78 @@ describe('computeMRO', () => {
     });
   });
 
+  // ---- Property collisions don't trigger OVERRIDES ------------------------
+  describe('Property nodes excluded from OVERRIDES', () => {
+    it('property name collision across parents does not emit OVERRIDES edge', () => {
+      const graph = createKnowledgeGraph();
+      const parentA = addClass(graph, 'ParentA', 'typescript');
+      const parentB = addClass(graph, 'ParentB', 'typescript');
+      const child = addClass(graph, 'Child', 'typescript');
+
+      addExtends(graph, 'Child', 'ParentA');
+      addExtends(graph, 'Child', 'ParentB');
+
+      // Add Property nodes (same name 'name') to both parents via HAS_METHOD
+      const propA = generateId('Property', 'ParentA.name');
+      graph.addNode({ id: propA, label: 'Property', properties: { name: 'name', filePath: 'src/ParentA.ts' } });
+      graph.addRelationship({
+        id: generateId('HAS_METHOD', `${parentA}->${propA}`),
+        sourceId: parentA, targetId: propA, type: 'HAS_METHOD', confidence: 1.0, reason: '',
+      });
+
+      const propB = generateId('Property', 'ParentB.name');
+      graph.addNode({ id: propB, label: 'Property', properties: { name: 'name', filePath: 'src/ParentB.ts' } });
+      graph.addRelationship({
+        id: generateId('HAS_METHOD', `${parentB}->${propB}`),
+        sourceId: parentB, targetId: propB, type: 'HAS_METHOD', confidence: 1.0, reason: '',
+      });
+
+      const result = computeMRO(graph);
+
+      // No OVERRIDES edge should be emitted for properties
+      const overrides = graph.relationships.filter(r => r.type === 'OVERRIDES');
+      expect(overrides).toHaveLength(0);
+      expect(result.overrideEdges).toBe(0);
+    });
+
+    it('method collision still triggers OVERRIDES even when properties also collide', () => {
+      const graph = createKnowledgeGraph();
+      const parentA = addClass(graph, 'PA', 'cpp');
+      const parentB = addClass(graph, 'PB', 'cpp');
+      addClass(graph, 'Ch', 'cpp');
+
+      addExtends(graph, 'Ch', 'PA');
+      addExtends(graph, 'Ch', 'PB');
+
+      // Method collision (should trigger OVERRIDES)
+      const methodA = addMethod(graph, 'PA', 'doWork');
+      addMethod(graph, 'PB', 'doWork');
+
+      // Property collision (should NOT trigger OVERRIDES)
+      const propA = generateId('Property', 'PA.id');
+      graph.addNode({ id: propA, label: 'Property', properties: { name: 'id', filePath: 'src/PA.ts' } });
+      graph.addRelationship({
+        id: generateId('HAS_METHOD', `${parentA}->${propA}`),
+        sourceId: parentA, targetId: propA, type: 'HAS_METHOD', confidence: 1.0, reason: '',
+      });
+
+      const propB = generateId('Property', 'PB.id');
+      graph.addNode({ id: propB, label: 'Property', properties: { name: 'id', filePath: 'src/PB.ts' } });
+      graph.addRelationship({
+        id: generateId('HAS_METHOD', `${parentB}->${propB}`),
+        sourceId: parentB, targetId: propB, type: 'HAS_METHOD', confidence: 1.0, reason: '',
+      });
+
+      const result = computeMRO(graph);
+
+      // Only 1 OVERRIDES edge (for the method, not the property)
+      const overrides = graph.relationships.filter(r => r.type === 'OVERRIDES');
+      expect(overrides).toHaveLength(1);
+      expect(overrides[0].targetId).toBe(methodA); // leftmost base wins for C++
+      expect(result.overrideEdges).toBe(1);
+    });
+  });
+
   // ---- No ambiguity: single parent ----------------------------------------
   describe('single parent, no ambiguity', () => {
     it('single parent with unique methods produces no ambiguities', () => {

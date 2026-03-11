@@ -66,6 +66,15 @@ describe('Kotlin heritage resolution', () => {
     expect(extends_.some(e => e.target === 'Validatable')).toBe(false);
   });
 
+  it('no OVERRIDES edges target Property nodes', () => {
+    const overrides = getRelationships(result, 'OVERRIDES');
+    for (const edge of overrides) {
+      const target = result.graph.getNode(edge.rel.targetId);
+      expect(target).toBeDefined();
+      expect(target!.label).not.toBe('Property');
+    }
+  });
+
   it('all heritage edges point to real graph nodes', () => {
     const extends_ = getRelationships(result, 'EXTENDS');
     const implements_ = getRelationships(result, 'IMPLEMENTS');

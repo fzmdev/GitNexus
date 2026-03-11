@@ -69,6 +69,15 @@ describe('Go package import & call resolution', () => {
   it('does not emit IMPLEMENTS edges (Go uses structural typing)', () => {
     expect(getRelationships(result, 'IMPLEMENTS').length).toBe(0);
   });
+
+  it('no OVERRIDES edges target Property nodes', () => {
+    const overrides = getRelationships(result, 'OVERRIDES');
+    for (const edge of overrides) {
+      const target = result.graph.getNode(edge.rel.targetId);
+      expect(target).toBeDefined();
+      expect(target!.label).not.toBe('Property');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

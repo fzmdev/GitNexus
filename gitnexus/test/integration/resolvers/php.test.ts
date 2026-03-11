@@ -112,12 +112,26 @@ describe('PHP heritage & import resolution', () => {
     expect(methods).toContain('__construct');
   });
 
-  it('detects properties on classes', () => {
+  it('detects properties on classes and traits', () => {
     const props = getNodesByLabel(result, 'Property');
     expect(props).toContain('id');
     expect(props).toContain('name');
     expect(props).toContain('email');
     expect(props).toContain('users');
+    // $status defined in both HasTimestamps and SoftDeletes traits
+    expect(props.filter(p => p === 'status').length).toBe(2);
+  });
+
+  // --- Property OVERRIDES exclusion ---
+
+  it('does not emit OVERRIDES for property name collisions ($status in both traits)', () => {
+    const overrides = getRelationships(result, 'OVERRIDES');
+    // OVERRIDES should only target Method nodes, never Property nodes
+    for (const edge of overrides) {
+      const target = result.graph.getNode(edge.rel.targetId);
+      expect(target).toBeDefined();
+      expect(target!.label).not.toBe('Property');
+    }
   });
 
   // --- MRO: OVERRIDES edge ---

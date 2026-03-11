@@ -52,6 +52,21 @@ describe('C# heritage resolution', () => {
     const ns = getNodesByLabel(result, 'Namespace');
     expect(ns.length).toBe(4);
   });
+
+  it('detects properties on classes', () => {
+    const props = getNodesByLabel(result, 'Property');
+    expect(props).toContain('Id');
+    expect(props).toContain('Name');
+  });
+
+  it('no OVERRIDES edges target Property nodes', () => {
+    const overrides = getRelationships(result, 'OVERRIDES');
+    for (const edge of overrides) {
+      const target = result.graph.getNode(edge.rel.targetId);
+      expect(target).toBeDefined();
+      expect(target!.label).not.toBe('Property');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

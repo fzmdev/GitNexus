@@ -268,6 +268,20 @@ export const findEnclosingClassId = (node: any, filePath: string): string | null
   let current = node.parent;
   while (current) {
     if (CLASS_CONTAINER_TYPES.has(current.type)) {
+      // Rust impl_item: for `impl Trait for Struct {}`, pick the type after `for`
+      if (current.type === 'impl_item') {
+        const children = current.children ?? [];
+        const forIdx = children.findIndex((c: any) => c.text === 'for');
+        if (forIdx !== -1) {
+          const nameNode = children.slice(forIdx + 1).find((c: any) =>
+            c.type === 'type_identifier' || c.type === 'identifier'
+          );
+          if (nameNode) {
+            return generateId('Impl', `${filePath}:${nameNode.text}`);
+          }
+        }
+        // Fall through: plain `impl Struct {}` — use first type_identifier below
+      }
       const nameNode = current.childForFieldName?.('name')
         ?? current.children?.find((c: any) =>
           c.type === 'type_identifier' || c.type === 'identifier' || c.type === 'name'
@@ -471,6 +485,8 @@ export const extractMethodSignature = (node: any): MethodSignature => {
     }
   }
 
+  // Go uses a different AST structure for return types (result_type / parameter_list)
+  // so returnType will be undefined for Go methods — known gap.
   for (const child of node.children ?? []) {
     if (child.type === 'type_annotation' || child.type === 'return_type') {
       const typeNode = child.children?.find((c: any) => c.isNamed);

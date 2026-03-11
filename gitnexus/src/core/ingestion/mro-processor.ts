@@ -12,6 +12,11 @@
  * - Python:    C3 linearization determines MRO; first in linearized order wins
  * - Rust:      no auto-resolution — requires qualified syntax, resolvedTo = null
  * - Default:   single inheritance — first definition wins
+ *
+ * OVERRIDES edge direction: Class → Method (not Method → Method).
+ * The source is the child class that inherits conflicting methods,
+ * the target is the winning ancestor method node.
+ * Cypher: MATCH (c:Class)-[r:CodeRelation {type: 'OVERRIDES'}]->(m:Method)
  */
 
 import { KnowledgeGraph, GraphRelationship } from '../graph/types.js';
@@ -284,7 +289,7 @@ export function computeMRO(graph: KnowledgeGraph): MROResult {
     const classNode = graph.getNode(classId);
     if (!classNode) continue;
 
-    const language = classNode.properties.language ?? 'typescript';
+    const language = classNode.properties.language ?? 'unknown';
     const className = classNode.properties.name;
 
     // Compute linearized MRO depending on language
@@ -311,6 +316,8 @@ export function computeMRO(graph: KnowledgeGraph): MROResult {
       for (const methodId of methods) {
         const methodNode = graph.getNode(methodId);
         if (!methodNode) continue;
+        // Properties don't participate in method resolution order
+        if (methodNode.label === 'Property') continue;
 
         const methodName = methodNode.properties.name;
         let defs = methodsByName.get(methodName);
@@ -413,11 +420,12 @@ export function computeMRO(graph: KnowledgeGraph): MROResult {
 }
 
 /**
- * Build a transitive edge-type map for an ancestor: for each ancestor reachable
- * from classId, determine whether it was reached via EXTENDS or IMPLEMENTS.
+ * Build transitive edge types for a class using BFS from the class to all ancestors.
  *
- * The heuristic: an ancestor's edge type is determined by the edge type used
- * on the direct parent through which it was first reached.
+ * Known limitation: BFS first-reach heuristic can misclassify an interface as
+ * EXTENDS if it's reachable via a class chain before being seen via IMPLEMENTS.
+ * E.g. if BaseClass also implements IFoo, IFoo may be classified as EXTENDS.
+ * This affects C#/Java/Kotlin conflict resolution in rare diamond hierarchies.
  */
 function buildTransitiveEdgeTypes(
   classId: string,

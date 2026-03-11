@@ -234,6 +234,63 @@ impl Counter {
       expect(result).toBe('Impl:test/counter.rs:Counter');
     });
 
+    it('picks struct name (not trait name) for impl Trait for Struct', () => {
+      const tree = parseCode(Rust, `
+struct MyStruct {
+  value: i32,
+}
+
+trait MyTrait {
+  fn do_something(&self);
+}
+
+impl MyTrait for MyStruct {
+  fn do_something(&self) {
+    println!("{}", self.value);
+  }
+}
+`);
+      // Find the impl_item that has a `for` keyword (impl Trait for Struct)
+      const implNode = findNode(tree.rootNode, n =>
+        n.type === 'impl_item' && n.children?.some((c: any) => c.text === 'for')
+      );
+      expect(implNode).not.toBeNull();
+
+      const funcItem = findNode(implNode!, n => n.type === 'function_item');
+      expect(funcItem).not.toBeNull();
+
+      const nameNode = findNode(funcItem!, n => n.type === 'identifier' && n.text === 'do_something');
+      expect(nameNode).not.toBeNull();
+
+      const result = findEnclosingClassId(nameNode!, 'test/my_struct.rs');
+      // Should resolve to MyStruct (the implementing type), NOT MyTrait
+      expect(result).toBe('Impl:test/my_struct.rs:MyStruct');
+    });
+
+    it('still picks struct name for plain impl Struct (no trait)', () => {
+      const tree = parseCode(Rust, `
+struct Counter {
+  count: u32,
+}
+impl Counter {
+  fn increment(&mut self) {
+    self.count += 1;
+  }
+}
+`);
+      const implNode = findNode(tree.rootNode, n => n.type === 'impl_item');
+      expect(implNode).not.toBeNull();
+
+      const funcItem = findNode(implNode!, n => n.type === 'function_item');
+      expect(funcItem).not.toBeNull();
+
+      const nameNode = findNode(funcItem!, n => n.type === 'identifier' && n.text === 'increment');
+      expect(nameNode).not.toBeNull();
+
+      const result = findEnclosingClassId(nameNode!, 'test/counter.rs');
+      expect(result).toBe('Impl:test/counter.rs:Counter');
+    });
+
     it('finds enclosing trait_item for a method', () => {
       const tree = parseCode(Rust, `
 trait Drawable {
