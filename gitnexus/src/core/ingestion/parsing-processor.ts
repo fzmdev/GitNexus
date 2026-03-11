@@ -75,7 +75,9 @@ const processParsingWithWorkers = async (
     }
 
     for (const sym of result.symbols) {
-      symbolTable.add(sym.filePath, sym.name, sym.nodeId, sym.type);
+      symbolTable.add(sym.filePath, sym.name, sym.nodeId, sym.type, {
+        parameterCount: sym.parameterCount,
+      });
     }
 
     allImports.push(...result.imports);
@@ -204,7 +206,7 @@ const processParsingSequential = async (
         : null;
 
       // Extract method signature for Method/Constructor nodes
-      const methodSig = (nodeLabel === 'Method' || nodeLabel === 'Constructor')
+      const methodSig = (nodeLabel === 'Function' || nodeLabel === 'Method' || nodeLabel === 'Constructor')
         ? extractMethodSignature(definitionNode)
         : undefined;
 
@@ -231,7 +233,9 @@ const processParsingSequential = async (
 
       graph.addNode(node);
 
-      symbolTable.add(file.path, nodeName, nodeId, nodeLabel);
+      symbolTable.add(file.path, nodeName, nodeId, nodeLabel, {
+        parameterCount: methodSig?.parameterCount,
+      });
 
       const fileId = generateId('File', file.path);
 

@@ -139,3 +139,24 @@ describe('Kotlin ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('Kotlin call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processUser → writeAudit to util/OneArg.kt via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('processUser');
+    expect(calls[0].target).toBe('writeAudit');
+    expect(calls[0].targetFilePath).toBe('util/OneArg.kt');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

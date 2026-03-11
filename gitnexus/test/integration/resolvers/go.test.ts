@@ -119,3 +119,24 @@ describe('Go ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('Go call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'go-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves main → WriteAudit to internal/onearg/log.go via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('main');
+    expect(calls[0].target).toBe('WriteAudit');
+    expect(calls[0].targetFilePath).toBe('internal/onearg/log.go');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

@@ -2,13 +2,20 @@ export interface SymbolDefinition {
   nodeId: string;
   filePath: string;
   type: string; // 'Function', 'Class', etc.
+  parameterCount?: number;
 }
 
 export interface SymbolTable {
   /**
    * Register a new symbol definition
    */
-  add: (filePath: string, name: string, nodeId: string, type: string) => void;
+  add: (
+    filePath: string,
+    name: string,
+    nodeId: string,
+    type: string,
+    metadata?: { parameterCount?: number }
+  ) => void;
   
   /**
    * High Confidence: Look for a symbol specifically inside a file
@@ -48,8 +55,19 @@ export const createSymbolTable = (): SymbolTable => {
   // Structure: SymbolName -> [List of Definitions]
   const globalIndex = new Map<string, SymbolDefinition[]>();
 
-  const add = (filePath: string, name: string, nodeId: string, type: string) => {
-    const def: SymbolDefinition = { nodeId, filePath, type };
+  const add = (
+    filePath: string,
+    name: string,
+    nodeId: string,
+    type: string,
+    metadata?: { parameterCount?: number }
+  ) => {
+    const def: SymbolDefinition = {
+      nodeId,
+      filePath,
+      type,
+      ...(metadata?.parameterCount !== undefined ? { parameterCount: metadata.parameterCount } : {}),
+    };
 
     // A. Add to File Index (shared reference — zero additional memory)
     if (!fileIndex.has(filePath)) {

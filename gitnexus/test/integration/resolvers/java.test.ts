@@ -135,3 +135,24 @@ describe('Java ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('Java call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'java-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processUser → writeAudit to util/OneArg.java via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('processUser');
+    expect(calls[0].target).toBe('writeAudit');
+    expect(calls[0].targetFilePath).toBe('util/OneArg.java');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

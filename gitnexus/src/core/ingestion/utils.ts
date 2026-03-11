@@ -1,5 +1,9 @@
+import type Parser from 'tree-sitter';
 import { SupportedLanguages } from '../../config/supported-languages.js';
 import { generateId } from '../../lib/utils.js';
+
+/** Tree-sitter AST node. Re-exported for use across ingestion modules. */
+export type SyntaxNode = Parser.SyntaxNode;
 
 /**
  * Ordered list of definition capture keys for tree-sitter query matches.
@@ -352,10 +356,10 @@ export const extractFunctionName = (node: any): { funcName: string | null; label
       }
     }
 
-    // Fallback for other languages
+    // Fallback for other languages (Kotlin uses simple_identifier, Swift uses simple_identifier)
     if (!funcName) {
       const nameNode = node.childForFieldName?.('name') ||
-                        node.children?.find((c: any) => c.type === 'identifier' || c.type === 'property_identifier');
+                        node.children?.find((c: any) => c.type === 'identifier' || c.type === 'property_identifier' || c.type === 'simple_identifier');
       funcName = nameNode?.text;
     }
   } else if (node.type === 'impl_item') {
@@ -455,11 +459,17 @@ export interface MethodSignature {
   returnType: string | undefined;
 }
 
+const CALL_ARGUMENT_LIST_TYPES = new Set([
+  'arguments',
+  'argument_list',
+  'value_arguments',
+]);
+
 /**
  * Extract parameter count and return type text from an AST method/function node.
  * Works across languages by looking for common AST patterns.
  */
-export const extractMethodSignature = (node: any): MethodSignature => {
+export const extractMethodSignature = (node: SyntaxNode | null | undefined): MethodSignature => {
   let parameterCount = 0;
   let returnType: string | undefined;
 
@@ -467,34 +477,79 @@ export const extractMethodSignature = (node: any): MethodSignature => {
 
   const paramListTypes = new Set([
     'formal_parameters', 'parameters', 'parameter_list',
-    'function_parameters', 'method_parameters',
+    'function_parameters', 'method_parameters', 'function_value_parameters',
   ]);
 
-  for (const child of node.children ?? []) {
-    if (paramListTypes.has(child.type)) {
-      for (const param of child.children ?? []) {
-        if (param.type !== ',' && param.type !== '(' && param.type !== ')' &&
-            param.type !== 'comment' && param.isNamed) {
-          // Skip 'self' / 'this' parameters
-          if (param.text === 'self' || param.text === '&self' || param.text === '&mut self' ||
-              param.type === 'self_parameter') continue;
-          parameterCount++;
-        }
+  const findParameterList = (current: SyntaxNode): SyntaxNode | null => {
+    for (const child of current.children) {
+      if (paramListTypes.has(child.type)) return child;
+    }
+    for (const child of current.children) {
+      const nested = findParameterList(child);
+      if (nested) return nested;
+    }
+    return null;
+  };
+
+  const parameterList = (
+    node.childForFieldName?.('parameters')
+      ?? findParameterList(node)
+  );
+
+  if (parameterList && paramListTypes.has(parameterList.type)) {
+    for (const param of parameterList.namedChildren) {
+      if (param.type === 'comment') continue;
+      if (param.text === 'self' || param.text === '&self' || param.text === '&mut self' ||
+          param.type === 'self_parameter') {
+        continue;
       }
-      break;
+      parameterCount++;
     }
   }
 
   // Go uses a different AST structure for return types (result_type / parameter_list)
   // so returnType will be undefined for Go methods — known gap.
-  for (const child of node.children ?? []) {
+  for (const child of node.children) {
     if (child.type === 'type_annotation' || child.type === 'return_type') {
-      const typeNode = child.children?.find((c: any) => c.isNamed);
+      const typeNode = child.children.find((c) => c.isNamed);
       if (typeNode) returnType = typeNode.text;
     }
   }
 
   return { parameterCount, returnType };
+};
+
+/**
+ * Count direct arguments for a call expression across common tree-sitter grammars.
+ * Returns undefined when the argument container cannot be located cheaply.
+ */
+export const countCallArguments = (callNode: SyntaxNode | null | undefined): number | undefined => {
+  if (!callNode) return undefined;
+
+  // Direct field or direct child (most languages)
+  let argsNode: SyntaxNode | null | undefined = callNode.childForFieldName('arguments')
+    ?? callNode.children.find((child) => CALL_ARGUMENT_LIST_TYPES.has(child.type));
+
+  // Kotlin/Swift: call_expression → call_suffix → value_arguments
+  // Search one level deeper for languages that wrap arguments in a suffix node
+  if (!argsNode) {
+    for (const child of callNode.children) {
+      if (!child.isNamed) continue;
+      const nested = child.children.find((gc) => CALL_ARGUMENT_LIST_TYPES.has(gc.type));
+      if (nested) { argsNode = nested; break; }
+    }
+  }
+
+  if (!argsNode) return undefined;
+
+  let count = 0;
+  for (const child of argsNode.children) {
+    if (!child.isNamed) continue;
+    if (child.type === 'comment') continue;
+    count++;
+  }
+
+  return count;
 };
 
 export const isVerboseIngestionEnabled = (): boolean => {
@@ -503,3 +558,7 @@ export const isVerboseIngestionEnabled = (): boolean => {
   const value = raw.toLowerCase();
   return value === '1' || value === 'true' || value === 'yes';
 };
+
+
+
+

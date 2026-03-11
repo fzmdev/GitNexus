@@ -327,6 +327,18 @@ describe('lookupExactFull', () => {
     // Same object reference — zero additional memory
     expect(fromExact).toBe(fromFuzzy);
   });
+
+  it('preserves optional callable metadata on stored definitions', () => {
+    const symbolTable = createSymbolTable();
+    symbolTable.add('src/math.ts', 'sum', 'Function:src/math.ts:sum', 'Function', { parameterCount: 2 });
+
+    const fromExact = symbolTable.lookupExactFull('src/math.ts', 'sum');
+    const fromFuzzy = symbolTable.lookupFuzzy('sum')[0];
+
+    expect(fromExact?.parameterCount).toBe(2);
+    expect(fromFuzzy.parameterCount).toBe(2);
+    expect(fromExact).toBe(fromFuzzy);
+  });
 });
 
 describe('isFileInPackageDir', () => {

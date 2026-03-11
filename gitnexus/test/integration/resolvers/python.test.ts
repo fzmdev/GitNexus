@@ -105,3 +105,24 @@ describe('Python ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('Python call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'python-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves run → write_audit to one.py via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('run');
+    expect(calls[0].target).toBe('write_audit');
+    expect(calls[0].targetFilePath).toBe('one.py');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

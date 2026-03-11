@@ -209,3 +209,24 @@ describe('PHP ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('PHP call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'php-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves create_user → write_audit to app/Utils/OneArg/log.php via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('create_user');
+    expect(calls[0].target).toBe('write_audit');
+    expect(calls[0].targetFilePath).toBe('app/Utils/OneArg/log.php');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

@@ -114,3 +114,24 @@ describe('TypeScript ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('TypeScript call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves run → writeAudit to src/one.ts via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('run');
+    expect(calls[0].target).toBe('writeAudit');
+    expect(calls[0].targetFilePath).toBe('src/one.ts');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

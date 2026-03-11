@@ -108,3 +108,25 @@ describe('C# ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('C# call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves CreateUser → WriteAudit to Utils/OneArg.cs via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('CreateUser');
+    expect(calls[0].target).toBe('WriteAudit');
+    expect(calls[0].targetFilePath).toBe('Utils/OneArg.cs');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+
+

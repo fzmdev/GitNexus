@@ -5,6 +5,8 @@ import TypeScript from 'tree-sitter-typescript';
 import Python from 'tree-sitter-python';
 import Java from 'tree-sitter-java';
 import CSharp from 'tree-sitter-c-sharp';
+import Kotlin from 'tree-sitter-kotlin';
+import CPP from 'tree-sitter-cpp';
 
 describe('extractMethodSignature', () => {
   const parser = new Parser();
@@ -104,9 +106,7 @@ describe('extractMethodSignature', () => {
 
       const sig = extractMethodSignature(methodNode);
       expect(sig.parameterCount).toBe(1);
-      // Python return type is in a 'return_type' child — check if extracted
-      // Note: Python uses 'type' child, exact behavior depends on AST structure
-      // The important thing is parameterCount is correct; returnType may vary
+      // The important thing is parameterCount is correct; returnType may vary.
     });
   });
 
@@ -136,6 +136,66 @@ describe('extractMethodSignature', () => {
       const methodNode = classBody.namedChild(0)!;
 
       const sig = extractMethodSignature(methodNode);
+      expect(sig.parameterCount).toBe(0);
+    });
+  });
+
+  describe('Kotlin', () => {
+    it('extracts params from a Kotlin function declaration', () => {
+      parser.setLanguage(Kotlin);
+      const code = `object OneArg {
+  fun writeAudit(message: String): String {
+    return message
+  }
+}`;
+      const tree = parser.parse(code);
+      const objectNode = tree.rootNode.child(0)!;
+      const classBody = objectNode.namedChild(1)!;
+      const functionNode = classBody.namedChild(0)!;
+
+      const sig = extractMethodSignature(functionNode);
+      expect(sig.parameterCount).toBe(1);
+    });
+
+    it('extracts zero params from a no-arg Kotlin function', () => {
+      parser.setLanguage(Kotlin);
+      const code = `object ZeroArg {
+  fun writeAudit(): String {
+    return "zero"
+  }
+}`;
+      const tree = parser.parse(code);
+      const objectNode = tree.rootNode.child(0)!;
+      const classBody = objectNode.namedChild(1)!;
+      const functionNode = classBody.namedChild(0)!;
+
+      const sig = extractMethodSignature(functionNode);
+      expect(sig.parameterCount).toBe(0);
+    });
+  });
+
+  describe('C++', () => {
+    it('extracts params from a nested C++ declarator', () => {
+      parser.setLanguage(CPP);
+      const code = `inline const char* write_audit(const char* message) {
+  return message;
+}`;
+      const tree = parser.parse(code);
+      const functionNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(functionNode);
+      expect(sig.parameterCount).toBe(1);
+    });
+
+    it('extracts zero params from a no-arg C++ function', () => {
+      parser.setLanguage(CPP);
+      const code = `inline const char* write_audit() {
+  return "zero";
+}`;
+      const tree = parser.parse(code);
+      const functionNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(functionNode);
       expect(sig.parameterCount).toBe(0);
     });
   });

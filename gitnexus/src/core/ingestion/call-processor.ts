@@ -1,13 +1,13 @@
 import { KnowledgeGraph } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
-import { SymbolTable } from './symbol-table.js';
-import { ImportMap, PackageMap } from './import-processor.js';
+import type { SymbolDefinition, SymbolTable } from './symbol-table.js';
+import { ImportMap, PackageMap, isFileInPackageDir } from './import-processor.js';
 import { resolveSymbol } from './symbol-resolver.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
-import { getLanguageFromFilename, isVerboseIngestionEnabled, yieldToEventLoop, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise } from './utils.js';
+import { getLanguageFromFilename, isVerboseIngestionEnabled, yieldToEventLoop, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, countCallArguments } from './utils.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedRoute } from './workers/parse-worker.js';
 
@@ -118,19 +118,17 @@ export const processCalls = async (
       // Skip common built-ins and noise
       if (isBuiltInOrNoise(calledName)) return;
 
+      const callNode = captureMap['call'];
+
       // 4. Resolve the target using priority strategy (returns confidence)
-      const resolved = resolveCallTarget(
+      const resolved = resolveCallTarget({
         calledName,
-        file.path,
-        symbolTable,
-        importMap,
-        packageMap
-      );
+        argCount: countCallArguments(callNode),
+      }, file.path, symbolTable, importMap, packageMap);
 
       if (!resolved) return;
 
       // 5. Find the enclosing function (caller)
-      const callNode = captureMap['call'];
       const enclosingFuncId = findEnclosingFunction(callNode, file.path, symbolTable);
       
       // Use enclosing function as source, fallback to file for top-level calls
@@ -166,42 +164,120 @@ export const processCalls = async (
 interface ResolveResult {
   nodeId: string;
   confidence: number;  // 0-1: how sure are we?
-  reason: string;      // 'import-resolved' | 'same-file' | 'fuzzy-global'
+  reason: string;      // 'import-resolved' | 'same-file' | 'unique-global'
 }
 
-/**
- * Resolve a function call to its target node ID using priority strategy:
- * A. Check imported files first (highest confidence)
- * B. Check local file definitions
- * C. Fuzzy global search (lowest confidence)
- *
- * Delegates resolution tiers to resolveSymbol and maps the result back to a
- * ResolveResult for backward compatibility with callers that need confidence
- * scores and reason strings.
- */
-const resolveCallTarget = (
+type ResolutionTier = 'same-file' | 'import-scoped' | 'unique-global';
+
+interface TieredCandidates {
+  candidates: SymbolDefinition[];
+  tier: ResolutionTier;
+}
+
+const CALLABLE_SYMBOL_TYPES = new Set([
+  'Function',
+  'Method',
+  'Constructor',
+  'Macro',
+  'Delegate',
+]);
+
+const collectTieredCandidates = (
   calledName: string,
   currentFile: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
-): ResolveResult | null => {
-  const resolved = resolveSymbol(calledName, currentFile, symbolTable, importMap, packageMap);
-  if (!resolved) return null;
+): TieredCandidates | null => {
+  const allDefs = symbolTable.lookupFuzzy(calledName);
+  if (allDefs.length === 0) return null;
 
-  // Map back to ResolveResult for backward compatibility
-  const isLocal = resolved.filePath === currentFile;
+  // Tier 1: Same-file — use globalIndex filtered to currentFile to catch overloads
+  // (fileIndex stores only one definition per name per file, losing overloads)
+  const localDefs = allDefs.filter(def => def.filePath === currentFile);
+  if (localDefs.length > 0) {
+    return { candidates: localDefs, tier: 'same-file' };
+  }
+
   const importedFiles = importMap.get(currentFile);
-  const isImported = importedFiles?.has(resolved.filePath) ?? false;
+  if (importedFiles) {
+    const importedDefs = allDefs.filter(def => importedFiles.has(def.filePath));
+    if (importedDefs.length > 0) {
+      return { candidates: importedDefs, tier: 'import-scoped' };
+    }
+  }
 
-  if (isLocal) {
-    return { nodeId: resolved.nodeId, confidence: 0.85, reason: 'same-file' };
+  const importedPackages = packageMap?.get(currentFile);
+  if (importedPackages) {
+    const packageDefs = allDefs.filter(def => {
+      for (const dirSuffix of importedPackages) {
+        if (isFileInPackageDir(def.filePath, dirSuffix)) return true;
+      }
+      return false;
+    });
+    if (packageDefs.length > 0) {
+      return { candidates: packageDefs, tier: 'import-scoped' };
+    }
   }
-  if (isImported) {
-    return { nodeId: resolved.nodeId, confidence: 0.9, reason: 'import-resolved' };
+
+  if (allDefs.length === 1) {
+    return { candidates: allDefs, tier: 'unique-global' };
   }
-  // Unique global: resolveSymbol only returns here when exactly 1 candidate exists
-  return { nodeId: resolved.nodeId, confidence: 0.5, reason: 'unique-global' };
+
+  return null;
+};
+
+const filterCallableCandidates = (
+  candidates: SymbolDefinition[],
+  argCount?: number,
+): SymbolDefinition[] => {
+  const callableCandidates = candidates.filter(candidate => CALLABLE_SYMBOL_TYPES.has(candidate.type));
+  if (callableCandidates.length === 0) return [];
+  if (argCount === undefined) return callableCandidates;
+
+  const hasParameterMetadata = callableCandidates.some(candidate => candidate.parameterCount !== undefined);
+  if (!hasParameterMetadata) return callableCandidates;
+
+  return callableCandidates.filter(candidate =>
+    candidate.parameterCount === undefined || candidate.parameterCount === argCount
+  );
+};
+
+const toResolveResult = (
+  definition: SymbolDefinition,
+  tier: ResolutionTier,
+): ResolveResult => {
+  if (tier === 'same-file') {
+    return { nodeId: definition.nodeId, confidence: 0.95, reason: 'same-file' };
+  }
+  if (tier === 'import-scoped') {
+    return { nodeId: definition.nodeId, confidence: 0.9, reason: 'import-resolved' };
+  }
+  return { nodeId: definition.nodeId, confidence: 0.5, reason: 'unique-global' };
+};
+
+/**
+ * Resolve a function call to its target node ID using priority strategy:
+ * A. Narrow candidates by scope tier (same-file, import-scoped, unique-global)
+ * B. Filter to callable symbol kinds
+ * C. Apply arity filtering when parameter metadata is available
+ *
+ * If filtering still leaves multiple candidates, refuse to emit a CALLS edge.
+ */
+const resolveCallTarget = (
+  call: Pick<ExtractedCall, 'calledName' | 'argCount'>,
+  currentFile: string,
+  symbolTable: SymbolTable,
+  importMap: ImportMap,
+  packageMap?: PackageMap,
+): ResolveResult | null => {
+  const tiered = collectTieredCandidates(call.calledName, currentFile, symbolTable, importMap, packageMap);
+  if (!tiered) return null;
+
+  const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount);
+  if (filteredCandidates.length !== 1) return null;
+
+  return toResolveResult(filteredCandidates[0], tiered.tier);
 };
 
 /**
@@ -240,7 +316,7 @@ export const processCallsFromExtracted = async (
 
     for (const call of calls) {
       const resolved = resolveCallTarget(
-        call.calledName,
+        call,
         call.filePath,
         symbolTable,
         importMap,

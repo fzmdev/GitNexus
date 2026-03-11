@@ -105,3 +105,24 @@ describe('Rust ambiguous symbol resolution', () => {
     }
   });
 });
+
+describe('Rust call resolution with arity filtering', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'rust-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves main → write_audit to src/onearg/mod.rs via arity narrowing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(1);
+    expect(calls[0].source).toBe('main');
+    expect(calls[0].target).toBe('write_audit');
+    expect(calls[0].targetFilePath).toBe('src/onearg/mod.rs');
+    expect(calls[0].rel.reason).toBe('import-resolved');
+  });
+});
+

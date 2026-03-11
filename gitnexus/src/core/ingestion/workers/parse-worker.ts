@@ -20,7 +20,7 @@ import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from '../constants.js
 const _require = createRequire(import.meta.url);
 let Swift: any = null;
 try { Swift = _require('tree-sitter-swift'); } catch {}
-import { findSiblingChild, getLanguageFromFilename, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature } from '../utils.js';
+import { getLanguageFromFilename, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature, countCallArguments } from '../utils.js';
 import { isNodeExported } from '../export-detection.js';
 import { detectFrameworkFromAST } from '../framework-detection.js';
 import { generateId } from '../../../lib/utils.js';
@@ -61,6 +61,7 @@ interface ParsedSymbol {
   name: string;
   nodeId: string;
   type: string;
+  parameterCount?: number;
 }
 
 export interface ExtractedImport {
@@ -74,6 +75,7 @@ export interface ExtractedCall {
   calledName: string;
   /** generateId of enclosing function, or generateId('File', filePath) for top-level */
   sourceId: string;
+  argCount?: number;
 }
 
 export interface ExtractedHeritage {
@@ -844,7 +846,12 @@ const processFileGroup = (
             const callNode = captureMap['call'];
             const sourceId = findEnclosingFunctionId(callNode, file.path)
               || generateId('File', file.path);
-            result.calls.push({ filePath: file.path, calledName, sourceId });
+            result.calls.push({
+              filePath: file.path,
+              calledName,
+              sourceId,
+              argCount: countCallArguments(callNode),
+            });
           }
         }
         continue;
@@ -916,7 +923,7 @@ const processFileGroup = (
 
       let parameterCount: number | undefined;
       let returnType: string | undefined;
-      if (nodeLabel === 'Method' || nodeLabel === 'Constructor') {
+      if (nodeLabel === 'Function' || nodeLabel === 'Method' || nodeLabel === 'Constructor') {
         const sig = extractMethodSignature(definitionNode);
         parameterCount = sig.parameterCount;
         returnType = sig.returnType;
@@ -947,6 +954,7 @@ const processFileGroup = (
         name: nodeName,
         nodeId,
         type: nodeLabel,
+        ...(parameterCount !== undefined ? { parameterCount } : {}),
       });
 
       const fileId = generateId('File', file.path);

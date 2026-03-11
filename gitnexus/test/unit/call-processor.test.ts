@@ -31,7 +31,7 @@ describe('processCallsFromExtracted', () => {
     expect(rels).toHaveLength(1);
     expect(rels[0].sourceId).toBe('Function:src/index.ts:main');
     expect(rels[0].targetId).toBe('Function:src/index.ts:helper');
-    expect(rels[0].confidence).toBe(0.85);
+    expect(rels[0].confidence).toBe(0.95);
     expect(rels[0].reason).toBe('same-file');
   });
 
@@ -98,6 +98,47 @@ describe('processCallsFromExtracted', () => {
     expect(graph.relationshipCount).toBe(0);
   });
 
+  it('refuses non-callable symbols even when the name resolves', async () => {
+    symbolTable.add('src/index.ts', 'Widget', 'Class:src/index.ts:Widget', 'Class');
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'Widget',
+      sourceId: 'Function:src/index.ts:main',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+    expect(graph.relationshipCount).toBe(0);
+  });
+
+  it('refuses CALLS edges to Interface symbols', async () => {
+    symbolTable.add('src/types.ts', 'Serializable', 'Interface:src/types.ts:Serializable', 'Interface');
+    importMap.set('src/index.ts', new Set(['src/types.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'Serializable',
+      sourceId: 'Function:src/index.ts:main',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+    expect(graph.relationships.filter(r => r.type === 'CALLS')).toHaveLength(0);
+  });
+
+  it('refuses CALLS edges to Enum symbols', async () => {
+    symbolTable.add('src/status.ts', 'Status', 'Enum:src/status.ts:Status', 'Enum');
+    importMap.set('src/index.ts', new Set(['src/status.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'Status',
+      sourceId: 'Function:src/index.ts:main',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+    expect(graph.relationships.filter(r => r.type === 'CALLS')).toHaveLength(0);
+  });
+
   it('prefers same-file over import-resolved', async () => {
     // Symbol exists both locally and in imported file
     symbolTable.add('src/index.ts', 'render', 'Function:src/index.ts:render', 'Function');
@@ -130,6 +171,42 @@ describe('processCallsFromExtracted', () => {
 
     await processCallsFromExtracted(graph, calls, symbolTable, importMap);
     expect(graph.relationships.filter(r => r.type === 'CALLS')).toHaveLength(2);
+  });
+
+  it('uses arity to disambiguate import-scoped callable candidates', async () => {
+    symbolTable.add('src/logger.ts', 'log', 'Function:src/logger.ts:log', 'Function', { parameterCount: 0 });
+    symbolTable.add('src/formatter.ts', 'log', 'Function:src/formatter.ts:log', 'Function', { parameterCount: 1 });
+    importMap.set('src/index.ts', new Set(['src/logger.ts', 'src/formatter.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'log',
+      sourceId: 'Function:src/index.ts:main',
+      argCount: 1,
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetId).toBe('Function:src/formatter.ts:log');
+    expect(rels[0].reason).toBe('import-resolved');
+  });
+
+  it('refuses ambiguous call targets when arity does not produce a unique match', async () => {
+    symbolTable.add('src/logger.ts', 'log', 'Function:src/logger.ts:log', 'Function', { parameterCount: 1 });
+    symbolTable.add('src/formatter.ts', 'log', 'Function:src/formatter.ts:log', 'Function', { parameterCount: 1 });
+    importMap.set('src/index.ts', new Set(['src/logger.ts', 'src/formatter.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'log',
+      sourceId: 'Function:src/index.ts:main',
+      argCount: 1,
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+    expect(graph.relationships.filter(r => r.type === 'CALLS')).toHaveLength(0);
   });
 
   it('calls progress callback', async () => {
