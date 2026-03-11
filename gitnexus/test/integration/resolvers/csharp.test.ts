@@ -129,4 +129,38 @@ describe('C# call resolution with arity filtering', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Member-call resolution: obj.Method() resolves through pipeline
+// ---------------------------------------------------------------------------
+
+describe('C# member-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-member-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves ProcessUser → Save as a member call on User', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'Save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('ProcessUser');
+    expect(saveCall!.targetFilePath).toBe('Models/User.cs');
+  });
+
+  it('detects User class and Save method', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('Save');
+  });
+
+  it('emits HAS_METHOD edge from User to Save', () => {
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const edge = hasMethod.find(e => e.source === 'User' && e.target === 'Save');
+    expect(edge).toBeDefined();
+  });
+});
+
 

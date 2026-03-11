@@ -3,6 +3,8 @@ export interface SymbolDefinition {
   filePath: string;
   type: string; // 'Function', 'Class', etc.
   parameterCount?: number;
+  /** Links Method/Constructor to owning Class/Struct/Trait nodeId */
+  ownerId?: string;
 }
 
 export interface SymbolTable {
@@ -14,7 +16,7 @@ export interface SymbolTable {
     name: string,
     nodeId: string,
     type: string,
-    metadata?: { parameterCount?: number }
+    metadata?: { parameterCount?: number; ownerId?: string }
   ) => void;
   
   /**
@@ -60,13 +62,14 @@ export const createSymbolTable = (): SymbolTable => {
     name: string,
     nodeId: string,
     type: string,
-    metadata?: { parameterCount?: number }
+    metadata?: { parameterCount?: number; ownerId?: string }
   ) => {
     const def: SymbolDefinition = {
       nodeId,
       filePath,
       type,
       ...(metadata?.parameterCount !== undefined ? { parameterCount: metadata.parameterCount } : {}),
+      ...(metadata?.ownerId !== undefined ? { ownerId: metadata.ownerId } : {}),
     };
 
     // A. Add to File Index (shared reference — zero additional memory)

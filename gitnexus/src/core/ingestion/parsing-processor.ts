@@ -77,6 +77,7 @@ const processParsingWithWorkers = async (
     for (const sym of result.symbols) {
       symbolTable.add(sym.filePath, sym.name, sym.nodeId, sym.type, {
         parameterCount: sym.parameterCount,
+        ownerId: sym.ownerId,
       });
     }
 
@@ -233,8 +234,13 @@ const processParsingSequential = async (
 
       graph.addNode(node);
 
+      // Compute enclosing class for Method/Constructor/Property — used for both ownerId and HAS_METHOD
+      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property';
+      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNodeForRange, file.path) : null;
+
       symbolTable.add(file.path, nodeName, nodeId, nodeLabel, {
         parameterCount: methodSig?.parameterCount,
+        ownerId: enclosingClassId ?? undefined,
       });
 
       const fileId = generateId('File', file.path);
@@ -253,18 +259,15 @@ const processParsingSequential = async (
       graph.addRelationship(relationship);
 
       // ── HAS_METHOD: link method/constructor/property to enclosing class ──
-      if (nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property') {
-        const enclosingClassId = findEnclosingClassId(nameNode || definitionNodeForRange, file.path);
-        if (enclosingClassId) {
-          graph.addRelationship({
-            id: generateId('HAS_METHOD', `${enclosingClassId}->${nodeId}`),
-            sourceId: enclosingClassId,
-            targetId: nodeId,
-            type: 'HAS_METHOD',
-            confidence: 1.0,
-            reason: '',
-          });
-        }
+      if (enclosingClassId) {
+        graph.addRelationship({
+          id: generateId('HAS_METHOD', `${enclosingClassId}->${nodeId}`),
+          sourceId: enclosingClassId,
+          targetId: nodeId,
+          type: 'HAS_METHOD',
+          confidence: 1.0,
+          reason: '',
+        });
       }
     });
   }

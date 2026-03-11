@@ -127,3 +127,37 @@ describe('C++ call resolution with arity filtering', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Member-call resolution: obj.method() resolves through pipeline
+// ---------------------------------------------------------------------------
+
+describe('C++ member-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-member-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processUser → save as a member call on User', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+    expect(saveCall!.targetFilePath).toBe('user.h');
+  });
+
+  it('detects User class and save method', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+  });
+
+  it('emits HAS_METHOD edge from User to save', () => {
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const edge = hasMethod.find(e => e.source === 'User' && e.target === 'save');
+    expect(edge).toBeDefined();
+  });
+});
+

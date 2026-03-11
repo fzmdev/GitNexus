@@ -7,7 +7,15 @@ import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
-import { getLanguageFromFilename, isVerboseIngestionEnabled, yieldToEventLoop, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, countCallArguments } from './utils.js';
+import { 
+  getLanguageFromFilename,
+  isVerboseIngestionEnabled,
+  yieldToEventLoop,
+  FUNCTION_NODE_TYPES,
+  extractFunctionName,
+  isBuiltInOrNoise,
+  countCallArguments,
+} from './utils.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedRoute } from './workers/parse-worker.js';
 

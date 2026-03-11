@@ -160,3 +160,32 @@ describe('Kotlin call resolution with arity filtering', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Member-call resolution: obj.method() resolves through pipeline
+// ---------------------------------------------------------------------------
+
+describe('Kotlin member-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-member-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processUser → save as a member call on User', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+    expect(saveCall!.targetFilePath).toBe('models/User.kt');
+  });
+
+  it('detects User class and save function (Kotlin fns are Function nodes)', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    // Kotlin tree-sitter captures all function_declaration as Function, including class methods
+    expect(getNodesByLabel(result, 'Function')).toContain('save');
+  });
+});
+

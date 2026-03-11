@@ -126,3 +126,32 @@ describe('Python call resolution with arity filtering', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Member-call resolution: obj.method() resolves through pipeline
+// ---------------------------------------------------------------------------
+
+describe('Python member-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'python-member-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves process_user → save as a member call on User', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('process_user');
+    expect(saveCall!.targetFilePath).toBe('user.py');
+  });
+
+  it('detects User class and save function (Python methods are Function nodes)', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    // Python tree-sitter captures all function_definitions as Function, including methods
+    expect(getNodesByLabel(result, 'Function')).toContain('save');
+  });
+});
+

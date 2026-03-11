@@ -126,3 +126,36 @@ describe('Rust call resolution with arity filtering', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Member-call resolution: obj.method() resolves through pipeline
+// ---------------------------------------------------------------------------
+
+describe('Rust member-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'rust-member-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves process_user → save as a member call on User', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('process_user');
+    expect(saveCall!.targetFilePath).toBe('src/user.rs');
+  });
+
+  it('detects User struct and save function (Rust impl fns are Function nodes)', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    // Rust tree-sitter captures all function_item as Function, including impl methods
+    expect(getNodesByLabel(result, 'Function')).toContain('save');
+  });
+});
+

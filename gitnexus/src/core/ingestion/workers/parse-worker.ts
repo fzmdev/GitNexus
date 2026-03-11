@@ -20,7 +20,18 @@ import { getTreeSitterBufferSize, TREE_SITTER_MAX_BUFFER } from '../constants.js
 const _require = createRequire(import.meta.url);
 let Swift: any = null;
 try { Swift = _require('tree-sitter-swift'); } catch {}
-import { getLanguageFromFilename, FUNCTION_NODE_TYPES, extractFunctionName, isBuiltInOrNoise, DEFINITION_CAPTURE_KEYS, getDefinitionNodeFromCaptures, findEnclosingClassId, extractMethodSignature, countCallArguments } from '../utils.js';
+import { 
+  getLanguageFromFilename,
+  FUNCTION_NODE_TYPES,
+  extractFunctionName,
+  isBuiltInOrNoise,
+  getDefinitionNodeFromCaptures,
+  findEnclosingClassId,
+  extractMethodSignature,
+  countCallArguments,
+  inferCallForm,
+  extractReceiverName
+} from '../utils.js';
 import { isNodeExported } from '../export-detection.js';
 import { detectFrameworkFromAST } from '../framework-detection.js';
 import { generateId } from '../../../lib/utils.js';
@@ -62,6 +73,7 @@ interface ParsedSymbol {
   nodeId: string;
   type: string;
   parameterCount?: number;
+  ownerId?: string;
 }
 
 export interface ExtractedImport {
@@ -76,6 +88,10 @@ export interface ExtractedCall {
   /** generateId of enclosing function, or generateId('File', filePath) for top-level */
   sourceId: string;
   argCount?: number;
+  /** Discriminates free function calls from member/constructor calls */
+  callForm?: 'free' | 'member' | 'constructor';
+  /** Simple identifier of the receiver for member calls (e.g., 'user' in user.save()) */
+  receiverName?: string;
 }
 
 export interface ExtractedHeritage {
@@ -846,11 +862,15 @@ const processFileGroup = (
             const callNode = captureMap['call'];
             const sourceId = findEnclosingFunctionId(callNode, file.path)
               || generateId('File', file.path);
+            const callForm = inferCallForm(callNode, callNameNode);
+            const receiverName = callForm === 'member' ? extractReceiverName(callNameNode) : undefined;
             result.calls.push({
               filePath: file.path,
               calledName,
               sourceId,
               argCount: countCallArguments(callNode),
+              ...(callForm !== undefined ? { callForm } : {}),
+              ...(receiverName !== undefined ? { receiverName } : {}),
             });
           }
         }
@@ -949,12 +969,17 @@ const processFileGroup = (
         },
       });
 
+      // Compute enclosing class for Method/Constructor/Property — used for both ownerId and HAS_METHOD
+      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property';
+      const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
+
       result.symbols.push({
         filePath: file.path,
         name: nodeName,
         nodeId,
         type: nodeLabel,
         ...(parameterCount !== undefined ? { parameterCount } : {}),
+        ...(enclosingClassId ? { ownerId: enclosingClassId } : {}),
       });
 
       const fileId = generateId('File', file.path);
@@ -969,18 +994,15 @@ const processFileGroup = (
       });
 
       // ── HAS_METHOD: link method/constructor/property to enclosing class ──
-      if (nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property') {
-        const enclosingClassId = findEnclosingClassId(nameNode || definitionNode, file.path);
-        if (enclosingClassId) {
-          result.relationships.push({
-            id: generateId('HAS_METHOD', `${enclosingClassId}->${nodeId}`),
-            sourceId: enclosingClassId,
-            targetId: nodeId,
-            type: 'HAS_METHOD',
-            confidence: 1.0,
-            reason: '',
-          });
-        }
+      if (enclosingClassId) {
+        result.relationships.push({
+          id: generateId('HAS_METHOD', `${enclosingClassId}->${nodeId}`),
+          sourceId: enclosingClassId,
+          targetId: nodeId,
+          type: 'HAS_METHOD',
+          confidence: 1.0,
+          reason: '',
+        });
       }
     }
 

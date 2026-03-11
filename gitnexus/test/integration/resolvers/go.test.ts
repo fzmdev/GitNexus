@@ -140,3 +140,35 @@ describe('Go call resolution with arity filtering', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Member-call resolution: obj.Method() resolves through pipeline
+// ---------------------------------------------------------------------------
+
+describe('Go member-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'go-member-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processUser → Save as a member call on User', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'Save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+    expect(saveCall!.targetFilePath).toBe('models/user.go');
+  });
+
+  it('detects User struct and Save method', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('Save');
+  });
+});
+
