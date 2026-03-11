@@ -626,7 +626,9 @@ const resolveImportPath = (
     return cache(null);
   }
 
-  const pathLike = importPath.includes('/')
+  // C/C++ includes use actual file paths (e.g. "animal.h") — don't convert dots to slashes
+  const isCpp = language === SupportedLanguages.C || language === SupportedLanguages.CPlusPlus;
+  const pathLike = importPath.includes('/') || isCpp
     ? importPath
     : importPath.replace(/\./g, '/');
   const pathParts = pathLike.split('/').filter(Boolean);
