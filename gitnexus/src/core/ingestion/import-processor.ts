@@ -564,8 +564,18 @@ const resolveImportPath = (
     const braceIdx = importPath.indexOf('::{');
     if (braceIdx !== -1) {
       rustImportPath = importPath.substring(0, braceIdx);
-    } else if (importPath.includes('{')) {
-      // Handle cases like use {crate::a, crate::b} — skip, too complex for single resolution
+    } else if (importPath.startsWith('{') && importPath.endsWith('}')) {
+      // Top-level grouped imports: use {crate::a, crate::b}
+      // Iterate each part and return the first that resolves. This function returns a single
+      // string, so callers that need ALL edges must intercept before reaching here (see the
+      // Rust grouped-import blocks in processImports / processImportsBatch). This fallback
+      // handles any path that reaches resolveImportPath directly.
+      const inner = importPath.slice(1, -1);
+      const parts = inner.split(',').map(p => p.trim()).filter(Boolean);
+      for (const part of parts) {
+        const partResult = resolveRustImport(currentFile, part, allFiles);
+        if (partResult) return cache(partResult);
+      }
       return cache(null);
     }
 
@@ -1121,6 +1131,19 @@ export const processImports = async (
           return;
         }
 
+        // ---- Rust: expand top-level grouped imports: use {crate::a, crate::b} ----
+        // Tree-sitter captures the entire brace group as one import string. Split it here
+        // so each part gets its own edge — resolveImportPath can only return one path.
+        if (language === SupportedLanguages.Rust && rawImportPath.startsWith('{') && rawImportPath.endsWith('}')) {
+          const inner = rawImportPath.slice(1, -1);
+          const parts = inner.split(',').map(p => p.trim()).filter(Boolean);
+          for (const part of parts) {
+            const resolved = resolveRustImport(file.path, part, allFilePaths);
+            if (resolved) addImportEdge(file.path, resolved);
+          }
+          return;
+        }
+
         // ---- Standard single-file resolution ----
         const resolvedPath = resolveImportPath(
           file.path,
@@ -1323,6 +1346,19 @@ export const processImportsFromExtracted = async (
               addImportEdge(filePath, allFileList[i]);
             }
           }
+        }
+        continue;
+      }
+
+      // Rust: expand top-level grouped imports: use {crate::a, crate::b}
+      // Tree-sitter captures the entire brace group as one import string. Split it here
+      // so each part gets its own edge — resolveImportPath can only return one path.
+      if (language === SupportedLanguages.Rust && rawImportPath.startsWith('{') && rawImportPath.endsWith('}')) {
+        const inner = rawImportPath.slice(1, -1);
+        const parts = inner.split(',').map(p => p.trim()).filter(Boolean);
+        for (const part of parts) {
+          const resolved = resolveRustImport(filePath, part, allFilePaths);
+          if (resolved) addImportEdge(filePath, resolved);
         }
         continue;
       }

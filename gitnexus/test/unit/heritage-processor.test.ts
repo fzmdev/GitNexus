@@ -150,7 +150,7 @@ describe('processHeritageFromExtracted', () => {
       expect(impls).toHaveLength(0);
     });
 
-    it('uses I[A-Z] heuristic for unresolved interface names', async () => {
+    it('uses I[A-Z] heuristic for unresolved interface names in C#', async () => {
       // IDisposable is not in symbol table (external .NET type)
       const heritage: ExtractedHeritage[] = [{
         filePath: 'src/Resource.cs',
@@ -164,6 +164,23 @@ describe('processHeritageFromExtracted', () => {
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
       expect(impls).toHaveLength(1);
       expect(impls[0].targetId).toContain('IDisposable');
+    });
+
+    it('does not apply I[A-Z] heuristic for TypeScript — unresolved IFoo should be EXTENDS', async () => {
+      // The I[A-Z] convention is C#/Java-specific; TypeScript files should not be affected
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/service.ts',
+        className: 'MyService',
+        parentName: 'IFoo',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
+
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      expect(exts).toHaveLength(1);
+      expect(impls).toHaveLength(0);
     });
 
     it('does not misclassify non-I-prefixed unresolved names as interfaces', async () => {
@@ -215,6 +232,45 @@ describe('processHeritageFromExtracted', () => {
       const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
       expect(exts).toHaveLength(1); // BaseRepository
       expect(impls).toHaveLength(2); // IRepository + IDisposable
+    });
+  });
+
+  describe('Swift protocol conformance from extends captures', () => {
+    it('defaults unresolved PascalCase protocol names to IMPLEMENTS for Swift', async () => {
+      // Codable, Hashable, Equatable etc. are protocols — no I-prefix convention in Swift
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Model.swift',
+        className: 'User',
+        parentName: 'Codable',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
+
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      expect(impls).toHaveLength(1);
+      expect(exts).toHaveLength(0);
+      expect(impls[0].targetId).toContain('Codable');
+    });
+
+    it('still uses symbol table authoritatively for Swift (Tier 1 takes precedence)', async () => {
+      // When the parent is in the symbol table as a Class, EXTENDS wins even in Swift
+      symbolTable.add('src/Animal.swift', 'Animal', 'Class:src/Animal.swift:Animal', 'Class');
+
+      const heritage: ExtractedHeritage[] = [{
+        filePath: 'src/Dog.swift',
+        className: 'Dog',
+        parentName: 'Animal',
+        kind: 'extends',
+      }];
+
+      await processHeritageFromExtracted(graph, heritage, symbolTable, importMap);
+
+      const exts = graph.relationships.filter(r => r.type === 'EXTENDS');
+      const impls = graph.relationships.filter(r => r.type === 'IMPLEMENTS');
+      expect(exts).toHaveLength(1);
+      expect(impls).toHaveLength(0);
     });
   });
 

@@ -578,6 +578,11 @@ export const SWIFT_QUERIES = `
 ; Heritage - protocol inheritance
 (protocol_declaration name: (type_identifier) @heritage.class
   (inheritance_specifier inherits_from: (user_type (type_identifier) @heritage.extends))) @heritage
+
+; Heritage - extension protocol conformance (e.g. extension Foo: SomeProtocol)
+; Extensions wrap the name in user_type unlike class/struct/enum declarations
+(class_declaration "extension" name: (user_type (type_identifier) @heritage.class)
+  (inheritance_specifier inherits_from: (user_type (type_identifier) @heritage.extends))) @heritage
 `;
 
 export const LANGUAGE_QUERIES: Record<SupportedLanguages, string> = {

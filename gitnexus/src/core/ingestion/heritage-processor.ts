@@ -8,7 +8,10 @@
  * Languages like C# use a single `base_list` for both class and interface parents.
  * We resolve the correct edge type by checking the symbol table: if the parent is
  * registered as an Interface, we emit IMPLEMENTS; otherwise EXTENDS. For unresolved
- * external symbols, we fall back to the C#/Java `I[A-Z]` naming convention heuristic.
+ * external symbols, the fallback heuristic is language-gated:
+ *   - C# / Java: apply the `I[A-Z]` naming convention (e.g. IDisposable → IMPLEMENTS)
+ *   - Swift: default to IMPLEMENTS (protocol conformance is more common than class inheritance)
+ *   - All other languages: default to EXTENDS
  */
 
 import { KnowledgeGraph } from '../graph/types.js';
@@ -19,24 +22,29 @@ import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/pa
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
 import { getLanguageFromFilename, isVerboseIngestionEnabled, yieldToEventLoop } from './utils.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
 import { resolveSymbol } from './symbol-resolver.js';
 import type { ImportMap } from './import-processor.js';
 
-/** C#/Java convention: interfaces start with I followed by uppercase letter */
+/** C#/Java convention: interfaces start with I followed by an uppercase letter */
 const INTERFACE_NAME_RE = /^I[A-Z]/;
 
 /**
  * Determine whether a heritage.extends capture is actually an IMPLEMENTS relationship.
- * Uses the symbol table first (authoritative); falls back to naming convention for
- * external symbols not present in the graph.
+ * Uses the symbol table first (authoritative — Tier 1); falls back to a language-gated
+ * heuristic for external symbols not present in the graph:
+ *   - C# / Java: `I[A-Z]` naming convention
+ *   - Swift: default IMPLEMENTS (protocol conformance is the norm)
+ *   - All others: default EXTENDS
  */
 const resolveExtendsType = (
   parentName: string,
   currentFilePath: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  language: string,
 ): { type: 'EXTENDS' | 'IMPLEMENTS'; idPrefix: string } => {
   const resolved = resolveSymbol(parentName, currentFilePath, symbolTable, importMap);
   if (resolved) {
@@ -45,8 +53,13 @@ const resolveExtendsType = (
       ? { type: 'IMPLEMENTS', idPrefix: 'Interface' }
       : { type: 'EXTENDS', idPrefix: 'Class' };
   }
-  // Unresolved symbol — fall back to naming convention heuristic
-  if (INTERFACE_NAME_RE.test(parentName)) {
+  // Unresolved symbol — fall back to language-specific heuristic
+  if (language === SupportedLanguages.CSharp || language === SupportedLanguages.Java) {
+    if (INTERFACE_NAME_RE.test(parentName)) {
+      return { type: 'IMPLEMENTS', idPrefix: 'Interface' };
+    }
+  } else if (language === SupportedLanguages.Swift) {
+    // Protocol conformance is far more common than class inheritance in Swift
     return { type: 'IMPLEMENTS', idPrefix: 'Interface' };
   }
   return { type: 'EXTENDS', idPrefix: 'Class' };
@@ -126,7 +139,7 @@ export const processHeritage = async (
         const className = captureMap['heritage.class'].text;
         const parentClassName = captureMap['heritage.extends'].text;
 
-        const { type: relType, idPrefix } = resolveExtendsType(parentClassName, file.path, symbolTable, importMap);
+        const { type: relType, idPrefix } = resolveExtendsType(parentClassName, file.path, symbolTable, importMap, language);
 
         const childId = symbolTable.lookupExact(file.path, className) ||
                         resolveSymbol(className, file.path, symbolTable, importMap)?.nodeId ||
@@ -236,7 +249,8 @@ export const processHeritageFromExtracted = async (
     const h = extractedHeritage[i];
 
     if (h.kind === 'extends') {
-      const { type: relType, idPrefix } = resolveExtendsType(h.parentName, h.filePath, symbolTable, importMap);
+      const fileLanguage = getLanguageFromFilename(h.filePath) ?? '';
+      const { type: relType, idPrefix } = resolveExtendsType(h.parentName, h.filePath, symbolTable, importMap, fileLanguage);
 
       const childId = symbolTable.lookupExact(h.filePath, h.className) ||
                       resolveSymbol(h.className, h.filePath, symbolTable, importMap)?.nodeId ||
