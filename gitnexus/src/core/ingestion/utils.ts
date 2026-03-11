@@ -492,8 +492,9 @@ export const extractMethodSignature = (node: SyntaxNode | null | undefined): Met
   };
 
   const parameterList = (
-    node.childForFieldName?.('parameters')
-      ?? findParameterList(node)
+    paramListTypes.has(node.type) ? node                // node itself IS the parameter list (e.g. C# primary constructors)
+      : node.childForFieldName?.('parameters')
+        ?? findParameterList(node)
   );
 
   if (parameterList && paramListTypes.has(parameterList.type)) {
@@ -572,7 +573,12 @@ const MEMBER_ACCESS_NODE_TYPES = new Set([
  * Only includes patterns that the tree-sitter queries already capture as @call.
  */
 const CONSTRUCTOR_CALL_NODE_TYPES = new Set([
-  'constructor_invocation',      // Kotlin: Foo()
+  'constructor_invocation',              // Kotlin: Foo()
+  'new_expression',                      // TS/JS/C++: new Foo()
+  'object_creation_expression',          // Java/C#/PHP: new Foo()
+  'implicit_object_creation_expression', // C# 9: User u = new(...)
+  'composite_literal',                   // Go: User{...}
+  'struct_expression',                   // Rust: User { ... }
 ]);
 
 /**

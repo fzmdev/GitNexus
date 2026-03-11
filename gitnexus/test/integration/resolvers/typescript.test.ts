@@ -169,3 +169,40 @@ describe('TypeScript member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Constructor resolution: new Foo() resolves to Class/Constructor
+// ---------------------------------------------------------------------------
+
+describe('TypeScript constructor-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-constructor-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves new User() as a CALLS edge to the User class', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('processUser');
+    expect(ctorCall!.targetLabel).toBe('Class');
+    expect(ctorCall!.targetFilePath).toBe('src/user.ts');
+  });
+
+  it('also resolves user.save() as a member call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+  });
+
+  it('detects User class, save method, and processUser function', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+    expect(getNodesByLabel(result, 'Function')).toContain('processUser');
+  });
+});
+

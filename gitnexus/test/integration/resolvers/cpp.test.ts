@@ -161,3 +161,39 @@ describe('C++ member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Constructor resolution: new Foo() resolves to Class
+// ---------------------------------------------------------------------------
+
+describe('C++ constructor-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-constructor-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves new User() as a CALLS edge to the User class', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('processUser');
+    expect(ctorCall!.targetLabel).toBe('Class');
+    expect(ctorCall!.targetFilePath).toBe('user.h');
+    expect(ctorCall!.rel.reason).toBe('import-resolved');
+  });
+
+  it('detects User class and save method', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+  });
+
+  it('resolves #include import', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    expect(imports.length).toBe(1);
+    expect(imports[0].targetFilePath).toBe('user.h');
+  });
+});
+

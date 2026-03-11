@@ -227,4 +227,103 @@ describe('processCallsFromExtracted', () => {
     await processCallsFromExtracted(graph, [], symbolTable, importMap);
     expect(graph.relationshipCount).toBe(0);
   });
+
+  // ---- Constructor-aware resolution (Phase 2) ----
+
+  it('resolves constructor call to Class when no Constructor node exists', async () => {
+    symbolTable.add('src/models.ts', 'User', 'Class:src/models.ts:User', 'Class');
+    importMap.set('src/index.ts', new Set(['src/models.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'User',
+      sourceId: 'Function:src/index.ts:main',
+      callForm: 'constructor',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetId).toBe('Class:src/models.ts:User');
+    expect(rels[0].reason).toBe('import-resolved');
+  });
+
+  it('resolves constructor call to Constructor node over Class node', async () => {
+    symbolTable.add('src/models.ts', 'User', 'Class:src/models.ts:User', 'Class');
+    symbolTable.add('src/models.ts', 'User', 'Constructor:src/models.ts:User', 'Constructor', { parameterCount: 1 });
+    importMap.set('src/index.ts', new Set(['src/models.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'User',
+      sourceId: 'Function:src/index.ts:main',
+      argCount: 1,
+      callForm: 'constructor',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetId).toBe('Constructor:src/models.ts:User');
+  });
+
+  it('refuses Class target without callForm=constructor (existing behavior)', async () => {
+    symbolTable.add('src/models.ts', 'User', 'Class:src/models.ts:User', 'Class');
+    importMap.set('src/index.ts', new Set(['src/models.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'User',
+      sourceId: 'Function:src/index.ts:main',
+      // no callForm — treated as regular call
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+
+    // Without constructor callForm, Class is not in CALLABLE_SYMBOL_TYPES → refused
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(0);
+  });
+
+  it('constructor call falls back to callable types when no Constructor/Class found', async () => {
+    // Edge case: calledName matches a Function, not a Class/Constructor
+    symbolTable.add('src/utils.ts', 'Widget', 'Function:src/utils.ts:Widget', 'Function');
+    importMap.set('src/index.ts', new Set(['src/utils.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'Widget',
+      sourceId: 'Function:src/index.ts:main',
+      callForm: 'constructor',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+
+    // Falls back to callable filtering — Function is callable
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetId).toBe('Function:src/utils.ts:Widget');
+  });
+
+  it('constructor arity filtering narrows overloaded constructors', async () => {
+    symbolTable.add('src/models.ts', 'User', 'Constructor:src/models.ts:User(0)', 'Constructor', { parameterCount: 0 });
+    symbolTable.add('src/models.ts', 'User', 'Constructor:src/models.ts:User(2)', 'Constructor', { parameterCount: 2 });
+    importMap.set('src/index.ts', new Set(['src/models.ts']));
+
+    const calls: ExtractedCall[] = [{
+      filePath: 'src/index.ts',
+      calledName: 'User',
+      sourceId: 'Function:src/index.ts:main',
+      argCount: 2,
+      callForm: 'constructor',
+    }];
+
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap);
+
+    const rels = graph.relationships.filter(r => r.type === 'CALLS');
+    expect(rels).toHaveLength(1);
+    expect(rels[0].targetId).toBe('Constructor:src/models.ts:User(2)');
+  });
 });

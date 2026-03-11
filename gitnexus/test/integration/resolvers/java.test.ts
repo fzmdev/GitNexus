@@ -190,3 +190,41 @@ describe('Java member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Constructor resolution: new Foo() resolves to Constructor/Class
+// ---------------------------------------------------------------------------
+
+describe('Java constructor-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'java-constructor-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves new User() as a CALLS edge to the User constructor', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('processUser');
+    // Java has explicit constructor_declaration → Constructor node
+    expect(ctorCall!.targetLabel).toBe('Constructor');
+    expect(ctorCall!.targetFilePath).toBe('models/User.java');
+  });
+
+  it('also resolves user.save() as a member call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+  });
+
+  it('detects User class, User constructor, save method', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Constructor')).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+  });
+});
+

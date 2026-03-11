@@ -33,12 +33,14 @@ describe('Go package import & call resolution', () => {
     ]);
   });
 
-  it('emits exactly 5 cross-package CALLS edges via PackageMap', () => {
+  it('emits exactly 7 CALLS edges (5 function + 2 struct literal)', () => {
     const calls = getRelationships(result, 'CALLS');
-    expect(calls.length).toBe(5);
+    expect(calls.length).toBe(7);
     expect(edgeSet(calls)).toEqual([
       'Authenticate → NewUser',
+      'NewAdmin → Admin',
       'NewAdmin → NewUser',
+      'NewUser → User',
       'main → Authenticate',
       'main → NewAdmin',
       'main → NewUser',
@@ -169,6 +171,47 @@ describe('Go member-call resolution', () => {
     });
     expect(structs).toContain('User');
     expect(getNodesByLabel(result, 'Method')).toContain('Save');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Struct literal resolution: User{...} resolves to Struct node
+// ---------------------------------------------------------------------------
+
+describe('Go struct literal resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'go-struct-literals'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves User{...} as a CALLS edge to the User struct', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('processUser');
+    expect(ctorCall!.targetLabel).toBe('Struct');
+    expect(ctorCall!.targetFilePath).toBe('user.go');
+  });
+
+  it('also resolves user.Save() as a member call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'Save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+  });
+
+  it('detects User struct, Save method, and processUser function', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('Save');
+    expect(getNodesByLabel(result, 'Function')).toContain('processUser');
   });
 });
 

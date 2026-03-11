@@ -54,6 +54,10 @@ export const TYPESCRIPT_QUERIES = `
   function: (member_expression
     property: (property_identifier) @call.name)) @call
 
+; Constructor calls: new Foo()
+(new_expression
+  constructor: (identifier) @call.name) @call
+
 ; Heritage queries - class extends
 (class_declaration
   name: (type_identifier) @heritage.class
@@ -112,6 +116,10 @@ export const JAVASCRIPT_QUERIES = `
   function: (member_expression
     property: (property_identifier) @call.name)) @call
 
+; Constructor calls: new Foo()
+(new_expression
+  constructor: (identifier) @call.name) @call
+
 ; Heritage queries - class extends (JavaScript uses different AST than TypeScript)
 ; In tree-sitter-javascript, class_heritage directly contains the parent identifier
 (class_declaration
@@ -169,6 +177,9 @@ export const JAVA_QUERIES = `
 ; Calls
 (method_invocation name: (identifier) @call.name) @call
 (method_invocation object: (_) name: (identifier) @call.name) @call
+
+; Constructor calls: new Foo()
+(object_creation_expression type: (type_identifier) @call.name) @call
 
 ; Heritage - extends class
 (class_declaration name: (identifier) @heritage.class
@@ -236,6 +247,9 @@ export const GO_QUERIES = `
 ; Calls
 (call_expression function: (identifier) @call.name) @call
 (call_expression function: (selector_expression field: (field_identifier) @call.name)) @call
+
+; Struct literal construction: User{Name: "Alice"}
+(composite_literal type: (type_identifier) @call.name) @call
 `;
 
 // C++ queries - works with tree-sitter-cpp
@@ -299,6 +313,9 @@ export const CPP_QUERIES = `
 (call_expression function: (qualified_identifier name: (identifier) @call.name)) @call
 (call_expression function: (template_function name: (identifier) @call.name)) @call
 
+; Constructor calls: new User()
+(new_expression type: (type_identifier) @call.name) @call
+
 ; Heritage
 (class_specifier name: (type_identifier) @heritage.class
   (base_class_clause (type_identifier) @heritage.extends)) @heritage
@@ -328,6 +345,10 @@ export const CSHARP_QUERIES = `
 (constructor_declaration name: (identifier) @name) @definition.constructor
 (property_declaration name: (identifier) @name) @definition.property
 
+; Primary constructors (C# 12): class User(string name, int age) { }
+(class_declaration name: (identifier) @name (parameter_list) @definition.constructor)
+(record_declaration name: (identifier) @name (parameter_list) @definition.constructor)
+
 ; Using
 (using_directive (qualified_name) @import.source) @import
 (using_directive (identifier) @import.source) @import
@@ -335,6 +356,12 @@ export const CSHARP_QUERIES = `
 ; Calls
 (invocation_expression function: (identifier) @call.name) @call
 (invocation_expression function: (member_access_expression name: (identifier) @call.name)) @call
+
+; Constructor calls: new Foo() and new Foo { Props }
+(object_creation_expression type: (identifier) @call.name) @call
+
+; Target-typed new (C# 9): User u = new("x", 5)
+(variable_declaration type: (identifier) @call.name (variable_declarator (implicit_object_creation_expression) @call))
 
 ; Heritage
 (class_declaration name: (identifier) @heritage.class
@@ -368,6 +395,9 @@ export const RUST_QUERIES = `
 (call_expression function: (field_expression field: (field_identifier) @call.name)) @call
 (call_expression function: (scoped_identifier name: (identifier) @call.name)) @call
 (call_expression function: (generic_function function: (identifier) @call.name)) @call
+
+; Struct literal construction: User { name: value }
+(struct_expression name: (type_identifier) @call.name) @call
 
 ; Heritage (trait implementation) — all combinations of concrete/generic trait × concrete/generic type
 (impl_item trait: (type_identifier) @heritage.trait type: (type_identifier) @heritage.class) @heritage
@@ -434,6 +464,9 @@ export const PHP_QUERIES = `
 ; Static call: Foo::bar() (php_only uses scoped_call_expression)
 (scoped_call_expression
   name: (name) @call.name) @call
+
+; Constructor call: new User()
+(object_creation_expression (name) @call.name) @call
 
 ; ── Heritage: extends ────────────────────────────────────────────────────────
 (class_declaration

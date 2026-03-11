@@ -41,11 +41,19 @@ describe('C# heritage resolution', () => {
     expect(implements_[0].target).toBe('IRepository');
   });
 
-  it('emits CALLS edge: CreateUser → Log', () => {
+  it('emits CALLS edges from CreateUser (including constructor)', () => {
     const calls = getRelationships(result, 'CALLS');
-    expect(calls.length).toBe(1);
-    expect(calls[0].source).toBe('CreateUser');
-    expect(calls[0].target).toBe('Log');
+    expect(calls.length).toBe(2);
+    const targets = edgeSet(calls);
+    expect(targets).toContain('CreateUser → Log');
+    expect(targets).toContain('CreateUser → User');
+  });
+
+  it('resolves new User() to the User class via constructor discrimination', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.targetLabel).toBe('Class');
   });
 
   it('detects 4 namespaces', () => {
@@ -163,4 +171,66 @@ describe('C# member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Primary constructor resolution: class User(string name, int age) { }
+// ---------------------------------------------------------------------------
 
+describe('C# primary constructor resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-primary-ctors'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Constructor nodes for primary constructors on class and record', () => {
+    const ctors = getNodesByLabel(result, 'Constructor');
+    expect(ctors).toContain('User');
+    expect(ctors).toContain('Person');
+  });
+
+  it('primary constructor has correct parameter count', () => {
+    let userCtorParams: number | undefined;
+    let personCtorParams: number | undefined;
+    result.graph.forEachNode(n => {
+      if (n.label === 'Constructor' && n.properties.name === 'User') {
+        userCtorParams = n.properties.parameterCount as number;
+      }
+      if (n.label === 'Constructor' && n.properties.name === 'Person') {
+        personCtorParams = n.properties.parameterCount as number;
+      }
+    });
+    expect(userCtorParams).toBe(2);
+    expect(personCtorParams).toBe(2);
+  });
+
+  it('resolves new User(...) as a CALLS edge to the Constructor node', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('Run');
+    expect(ctorCall!.targetLabel).toBe('Constructor');
+    expect(ctorCall!.targetFilePath).toBe('Models/User.cs');
+  });
+
+  it('also resolves user.Save() as a method call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'Save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('Run');
+  });
+
+  it('emits HAS_METHOD edge from User class to User constructor', () => {
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const edge = hasMethod.find(e => e.source === 'User' && e.target === 'User');
+    expect(edge).toBeDefined();
+  });
+
+  it('emits HAS_METHOD edge from Person record to Person constructor', () => {
+    const hasMethod = getRelationships(result, 'HAS_METHOD');
+    const edge = hasMethod.find(e => e.source === 'Person' && e.target === 'Person');
+    expect(edge).toBeDefined();
+  });
+});

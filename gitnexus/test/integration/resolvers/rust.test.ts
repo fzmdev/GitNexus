@@ -159,3 +159,44 @@ describe('Rust member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Struct literal resolution: User { ... } resolves to Struct node
+// ---------------------------------------------------------------------------
+
+describe('Rust struct literal resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'rust-struct-literals'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves User { ... } as a CALLS edge to the User struct', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('process_user');
+    expect(ctorCall!.targetLabel).toBe('Struct');
+    expect(ctorCall!.targetFilePath).toBe('user.rs');
+    expect(ctorCall!.rel.reason).toBe('import-resolved');
+  });
+
+  it('also resolves user.save() as a member call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('process_user');
+  });
+
+  it('detects User struct and process_user function', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    expect(getNodesByLabel(result, 'Function')).toContain('process_user');
+  });
+});
+

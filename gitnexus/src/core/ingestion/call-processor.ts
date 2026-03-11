@@ -7,7 +7,7 @@ import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
 import { generateId } from '../../lib/utils.js';
-import { 
+import {
   getLanguageFromFilename,
   isVerboseIngestionEnabled,
   yieldToEventLoop,
@@ -15,6 +15,7 @@ import {
   extractFunctionName,
   isBuiltInOrNoise,
   countCallArguments,
+  inferCallForm,
 } from './utils.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedRoute } from './workers/parse-worker.js';
@@ -132,6 +133,7 @@ export const processCalls = async (
       const resolved = resolveCallTarget({
         calledName,
         argCount: countCallArguments(callNode),
+        callForm: inferCallForm(callNode, nameNode),
       }, file.path, symbolTable, importMap, packageMap);
 
       if (!resolved) return;
@@ -228,25 +230,40 @@ const collectTieredCandidates = (
     }
   }
 
-  if (allDefs.length === 1) {
-    return { candidates: allDefs, tier: 'unique-global' };
-  }
-
-  return null;
+  // Tier 3: Global — pass all candidates through; filterCallableCandidates
+  // will narrow by kind/arity and resolveCallTarget only emits when exactly 1 remains.
+  return { candidates: allDefs, tier: 'unique-global' };
 };
+
+const CONSTRUCTOR_TARGET_TYPES = new Set(['Constructor', 'Class', 'Struct', 'Record']);
 
 const filterCallableCandidates = (
   candidates: SymbolDefinition[],
   argCount?: number,
+  callForm?: 'free' | 'member' | 'constructor',
 ): SymbolDefinition[] => {
-  const callableCandidates = candidates.filter(candidate => CALLABLE_SYMBOL_TYPES.has(candidate.type));
-  if (callableCandidates.length === 0) return [];
-  if (argCount === undefined) return callableCandidates;
+  let kindFiltered: SymbolDefinition[];
 
-  const hasParameterMetadata = callableCandidates.some(candidate => candidate.parameterCount !== undefined);
-  if (!hasParameterMetadata) return callableCandidates;
+  if (callForm === 'constructor') {
+    // For constructor calls, prefer Constructor > Class/Struct/Record > callable fallback
+    const constructors = candidates.filter(c => c.type === 'Constructor');
+    if (constructors.length > 0) {
+      kindFiltered = constructors;
+    } else {
+      const types = candidates.filter(c => CONSTRUCTOR_TARGET_TYPES.has(c.type));
+      kindFiltered = types.length > 0 ? types : candidates.filter(c => CALLABLE_SYMBOL_TYPES.has(c.type));
+    }
+  } else {
+    kindFiltered = candidates.filter(c => CALLABLE_SYMBOL_TYPES.has(c.type));
+  }
 
-  return callableCandidates.filter(candidate =>
+  if (kindFiltered.length === 0) return [];
+  if (argCount === undefined) return kindFiltered;
+
+  const hasParameterMetadata = kindFiltered.some(candidate => candidate.parameterCount !== undefined);
+  if (!hasParameterMetadata) return kindFiltered;
+
+  return kindFiltered.filter(candidate =>
     candidate.parameterCount === undefined || candidate.parameterCount === argCount
   );
 };
@@ -267,13 +284,13 @@ const toResolveResult = (
 /**
  * Resolve a function call to its target node ID using priority strategy:
  * A. Narrow candidates by scope tier (same-file, import-scoped, unique-global)
- * B. Filter to callable symbol kinds
+ * B. Filter to callable symbol kinds (constructor-aware when callForm is set)
  * C. Apply arity filtering when parameter metadata is available
  *
  * If filtering still leaves multiple candidates, refuse to emit a CALLS edge.
  */
 const resolveCallTarget = (
-  call: Pick<ExtractedCall, 'calledName' | 'argCount'>,
+  call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm'>,
   currentFile: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
@@ -282,7 +299,7 @@ const resolveCallTarget = (
   const tiered = collectTieredCandidates(call.calledName, currentFile, symbolTable, importMap, packageMap);
   if (!tiered) return null;
 
-  const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount);
+  const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount, call.callForm);
   if (filteredCandidates.length !== 1) return null;
 
   return toResolveResult(filteredCandidates[0], tiered.tier);

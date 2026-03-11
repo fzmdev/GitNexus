@@ -264,3 +264,41 @@ describe('PHP member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Constructor resolution: new User() resolves to Class node
+// ---------------------------------------------------------------------------
+
+describe('PHP constructor-call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'php-constructor-calls'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves new User() as a CALLS edge to the User class', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const ctorCall = calls.find(c => c.target === 'User');
+    expect(ctorCall).toBeDefined();
+    expect(ctorCall!.source).toBe('processUser');
+    expect(ctorCall!.targetLabel).toBe('Class');
+    expect(ctorCall!.targetFilePath).toBe('Models/User.php');
+    expect(ctorCall!.rel.reason).toBe('import-resolved');
+  });
+
+  it('also resolves $user->save() as a member call', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('processUser');
+  });
+
+  it('detects User class, __construct method, and save method', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Method')).toContain('__construct');
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+  });
+});
+
