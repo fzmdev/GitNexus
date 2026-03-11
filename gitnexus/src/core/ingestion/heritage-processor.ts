@@ -26,7 +26,7 @@ import { SupportedLanguages } from '../../config/supported-languages.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedHeritage } from './workers/parse-worker.js';
 import { resolveSymbol } from './symbol-resolver.js';
-import type { ImportMap } from './import-processor.js';
+import type { ImportMap, PackageMap } from './import-processor.js';
 
 /** C#/Java convention: interfaces start with I followed by an uppercase letter */
 const INTERFACE_NAME_RE = /^I[A-Z]/;
@@ -45,8 +45,9 @@ const resolveExtendsType = (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   language: string,
+  packageMap?: PackageMap,
 ): { type: 'EXTENDS' | 'IMPLEMENTS'; idPrefix: string } => {
-  const resolved = resolveSymbol(parentName, currentFilePath, symbolTable, importMap);
+  const resolved = resolveSymbol(parentName, currentFilePath, symbolTable, importMap, packageMap);
   if (resolved) {
     const isInterface = resolved.type === 'Interface';
     return isInterface
@@ -71,6 +72,7 @@ export const processHeritage = async (
   astCache: ASTCache,
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
   onProgress?: (current: number, total: number) => void
 ) => {
   const parser = await loadParser();
@@ -136,16 +138,23 @@ export const processHeritage = async (
       // EXTENDS or IMPLEMENTS: resolve via symbol table for languages where
       // the tree-sitter query can't distinguish classes from interfaces (C#, Java)
       if (captureMap['heritage.class'] && captureMap['heritage.extends']) {
+        // Go struct embedding: skip named fields (only anonymous fields are embedded)
+        const extendsNode = captureMap['heritage.extends'];
+        const fieldDecl = extendsNode.parent;
+        if (fieldDecl?.type === 'field_declaration' && fieldDecl.childForFieldName('name')) {
+          return; // Named field, not struct embedding
+        }
+
         const className = captureMap['heritage.class'].text;
         const parentClassName = captureMap['heritage.extends'].text;
 
-        const { type: relType, idPrefix } = resolveExtendsType(parentClassName, file.path, symbolTable, importMap, language);
+        const { type: relType, idPrefix } = resolveExtendsType(parentClassName, file.path, symbolTable, importMap, language, packageMap);
 
         const childId = symbolTable.lookupExact(file.path, className) ||
-                        resolveSymbol(className, file.path, symbolTable, importMap)?.nodeId ||
+                        resolveSymbol(className, file.path, symbolTable, importMap, packageMap)?.nodeId ||
                         generateId('Class', `${file.path}:${className}`);
 
-        const parentId = resolveSymbol(parentClassName, file.path, symbolTable, importMap)?.nodeId ||
+        const parentId = resolveSymbol(parentClassName, file.path, symbolTable, importMap, packageMap)?.nodeId ||
                          generateId(idPrefix, `${parentClassName}`);
 
         if (childId && parentId && childId !== parentId) {
@@ -167,10 +176,10 @@ export const processHeritage = async (
 
         // Resolve class and interface IDs
         const classId = symbolTable.lookupExact(file.path, className) ||
-                        resolveSymbol(className, file.path, symbolTable, importMap)?.nodeId ||
+                        resolveSymbol(className, file.path, symbolTable, importMap, packageMap)?.nodeId ||
                         generateId('Class', `${file.path}:${className}`);
 
-        const interfaceId = resolveSymbol(interfaceName, file.path, symbolTable, importMap)?.nodeId ||
+        const interfaceId = resolveSymbol(interfaceName, file.path, symbolTable, importMap, packageMap)?.nodeId ||
                             generateId('Interface', `${interfaceName}`);
 
         if (classId && interfaceId) {
@@ -194,10 +203,10 @@ export const processHeritage = async (
 
         // Resolve struct and trait IDs
         const structId = symbolTable.lookupExact(file.path, structName) ||
-                         resolveSymbol(structName, file.path, symbolTable, importMap)?.nodeId ||
+                         resolveSymbol(structName, file.path, symbolTable, importMap, packageMap)?.nodeId ||
                          generateId('Struct', `${file.path}:${structName}`);
 
-        const traitId = resolveSymbol(traitName, file.path, symbolTable, importMap)?.nodeId ||
+        const traitId = resolveSymbol(traitName, file.path, symbolTable, importMap, packageMap)?.nodeId ||
                         generateId('Trait', `${traitName}`);
 
         if (structId && traitId) {
@@ -236,6 +245,7 @@ export const processHeritageFromExtracted = async (
   extractedHeritage: ExtractedHeritage[],
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
   onProgress?: (current: number, total: number) => void
 ) => {
   const total = extractedHeritage.length;
@@ -250,13 +260,13 @@ export const processHeritageFromExtracted = async (
 
     if (h.kind === 'extends') {
       const fileLanguage = getLanguageFromFilename(h.filePath) ?? '';
-      const { type: relType, idPrefix } = resolveExtendsType(h.parentName, h.filePath, symbolTable, importMap, fileLanguage);
+      const { type: relType, idPrefix } = resolveExtendsType(h.parentName, h.filePath, symbolTable, importMap, fileLanguage, packageMap);
 
       const childId = symbolTable.lookupExact(h.filePath, h.className) ||
-                      resolveSymbol(h.className, h.filePath, symbolTable, importMap)?.nodeId ||
+                      resolveSymbol(h.className, h.filePath, symbolTable, importMap, packageMap)?.nodeId ||
                       generateId('Class', `${h.filePath}:${h.className}`);
 
-      const parentId = resolveSymbol(h.parentName, h.filePath, symbolTable, importMap)?.nodeId ||
+      const parentId = resolveSymbol(h.parentName, h.filePath, symbolTable, importMap, packageMap)?.nodeId ||
                        generateId(idPrefix, `${h.parentName}`);
 
       if (childId && parentId && childId !== parentId) {
@@ -271,10 +281,10 @@ export const processHeritageFromExtracted = async (
       }
     } else if (h.kind === 'implements') {
       const classId = symbolTable.lookupExact(h.filePath, h.className) ||
-                      resolveSymbol(h.className, h.filePath, symbolTable, importMap)?.nodeId ||
+                      resolveSymbol(h.className, h.filePath, symbolTable, importMap, packageMap)?.nodeId ||
                       generateId('Class', `${h.filePath}:${h.className}`);
 
-      const interfaceId = resolveSymbol(h.parentName, h.filePath, symbolTable, importMap)?.nodeId ||
+      const interfaceId = resolveSymbol(h.parentName, h.filePath, symbolTable, importMap, packageMap)?.nodeId ||
                           generateId('Interface', `${h.parentName}`);
 
       if (classId && interfaceId) {
@@ -289,10 +299,10 @@ export const processHeritageFromExtracted = async (
       }
     } else if (h.kind === 'trait-impl') {
       const structId = symbolTable.lookupExact(h.filePath, h.className) ||
-                       resolveSymbol(h.className, h.filePath, symbolTable, importMap)?.nodeId ||
+                       resolveSymbol(h.className, h.filePath, symbolTable, importMap, packageMap)?.nodeId ||
                        generateId('Struct', `${h.filePath}:${h.className}`);
 
-      const traitId = resolveSymbol(h.parentName, h.filePath, symbolTable, importMap)?.nodeId ||
+      const traitId = resolveSymbol(h.parentName, h.filePath, symbolTable, importMap, packageMap)?.nodeId ||
                       generateId('Trait', `${h.parentName}`);
 
       if (structId && traitId) {

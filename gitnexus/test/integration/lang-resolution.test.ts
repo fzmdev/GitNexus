@@ -381,6 +381,69 @@ describe('Rust trait implementation resolution', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Go: package imports + cross-package calls (exercises PackageMap)
+// ---------------------------------------------------------------------------
+
+describe('Go package import & call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'go-pkg'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects exactly 2 structs and 1 interface', () => {
+    expect(getNodesByLabel(result, 'Struct')).toEqual(['Admin', 'User']);
+    expect(getNodesByLabel(result, 'Interface')).toEqual(['Repository']);
+  });
+
+  it('detects exactly 5 functions', () => {
+    expect(getNodesByLabel(result, 'Function')).toEqual([
+      'Authenticate', 'NewAdmin', 'NewUser', 'ValidateToken', 'main',
+    ]);
+  });
+
+  it('emits exactly 5 cross-package CALLS edges via PackageMap', () => {
+    const calls = getRelationships(result, 'CALLS');
+    expect(calls.length).toBe(5);
+    expect(edgeSet(calls)).toEqual([
+      'Authenticate → NewUser',
+      'NewAdmin → NewUser',
+      'main → Authenticate',
+      'main → NewAdmin',
+      'main → NewUser',
+    ]);
+  });
+
+  it('resolves exactly 7 IMPORTS edges across Go packages', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    expect(imports.length).toBe(7);
+    expect(edgeSet(imports)).toEqual([
+      'main.go → admin.go',
+      'main.go → repository.go',
+      'main.go → service.go',
+      'main.go → user.go',
+      'service.go → admin.go',
+      'service.go → repository.go',
+      'service.go → user.go',
+    ]);
+  });
+
+  it('emits exactly 1 EXTENDS edge for struct embedding: Admin → User', () => {
+    const extends_ = getRelationships(result, 'EXTENDS');
+    expect(extends_.length).toBe(1);
+    expect(extends_[0].source).toBe('Admin');
+    expect(extends_[0].target).toBe('User');
+  });
+
+  it('does not emit IMPLEMENTS edges (Go uses structural typing)', () => {
+    expect(getRelationships(result, 'IMPLEMENTS').length).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Cross-language: ambiguous symbol refusal
 // ---------------------------------------------------------------------------
 

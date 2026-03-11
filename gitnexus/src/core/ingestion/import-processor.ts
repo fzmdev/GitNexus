@@ -19,6 +19,27 @@ export type ImportMap = Map<string, Set<string>>;
 
 export const createImportMap = (): ImportMap => new Map();
 
+// Type: Map<FilePath, Set<PackageDirSuffix>>
+// Stores Go package directory suffixes imported by a file (e.g., "/internal/auth/").
+// Avoids expanding every Go package import into N individual ImportMap edges.
+export type PackageMap = Map<string, Set<string>>;
+
+export const createPackageMap = (): PackageMap => new Map();
+
+/**
+ * Check if a file path belongs to a Go package identified by its directory suffix.
+ * Uses the same matching logic as resolveGoPackage but for a single file.
+ */
+export function isFileInGoPackage(filePath: string, pkgSuffix: string): boolean {
+  // Prepend '/' so paths like "internal/auth/service.go" match suffix "/internal/auth/"
+  const normalized = '/' + filePath.replace(/\\/g, '/');
+  if (!normalized.includes(pkgSuffix) || !normalized.endsWith('.go') || normalized.endsWith('_test.go')) {
+    return false;
+  }
+  const afterPkg = normalized.substring(normalized.indexOf(pkgSuffix) + pkgSuffix.length);
+  return !afterPkg.includes('/');
+}
+
 /** Pre-built lookup structures for import resolution. Build once, reuse across chunks. */
 export interface ImportResolutionContext {
   allFilePaths: Set<string>;
@@ -838,6 +859,20 @@ function resolveJvmMemberImport(
 // ============================================================================
 
 /**
+ * Extract the package directory suffix from a Go import path.
+ * Returns the suffix string (e.g., "/internal/auth/") or null if invalid.
+ */
+function resolveGoPackageDir(
+  importPath: string,
+  goModule: GoModuleConfig,
+): string | null {
+  if (!importPath.startsWith(goModule.modulePath)) return null;
+  const relativePkg = importPath.slice(goModule.modulePath.length + 1);
+  if (!relativePkg) return null;
+  return '/' + relativePkg + '/';
+}
+
+/**
  * Resolve a Go internal package import to all .go files in the package directory.
  * Returns an array of file paths.
  */
@@ -857,7 +892,8 @@ function resolveGoPackage(
   const matches: string[] = [];
 
   for (let i = 0; i < normalizedFileList.length; i++) {
-    const normalized = normalizedFileList[i];
+    // Prepend '/' so paths like "internal/auth/service.go" match suffix "/internal/auth/"
+    const normalized = '/' + normalizedFileList[i];
     // File must be directly in the package directory (not a subdirectory)
     if (normalized.includes(pkgSuffix) && normalized.endsWith('.go') && !normalized.endsWith('_test.go')) {
       const afterPkg = normalized.substring(normalized.indexOf(pkgSuffix) + pkgSuffix.length);
@@ -924,6 +960,7 @@ export const processImports = async (
   onProgress?: (current: number, total: number) => void,
   repoRoot?: string,
   allPaths?: string[],
+  packageMap?: PackageMap,
 ) => {
   // Use allPaths (full repo) when available for cross-chunk resolution, else fall back to chunk files
   const allFileList = allPaths ?? files.map(f => f.path);
@@ -949,8 +986,8 @@ export const processImports = async (
   const swiftPackageConfig = await loadSwiftPackageConfig(effectiveRoot);
   const csharpConfigs = await loadCSharpProjectConfig(effectiveRoot);
 
-  // Helper: add an IMPORTS edge + update import map
-  const addImportEdge = (filePath: string, resolvedPath: string) => {
+  // Helper: add an IMPORTS edge to the graph only (no ImportMap update)
+  const addImportGraphEdge = (filePath: string, resolvedPath: string) => {
     const sourceId = generateId('File', filePath);
     const targetId = generateId('File', resolvedPath);
     const relId = generateId('IMPORTS', `${filePath}->${resolvedPath}`);
@@ -965,6 +1002,11 @@ export const processImports = async (
       confidence: 1.0,
       reason: '',
     });
+  };
+
+  // Helper: add an IMPORTS edge + update import map
+  const addImportEdge = (filePath: string, resolvedPath: string) => {
+    addImportGraphEdge(filePath, resolvedPath);
 
     if (!importMap.has(filePath)) {
       importMap.set(filePath, new Set());
@@ -1084,12 +1126,27 @@ export const processImports = async (
 
         // ---- Go: handle package-level imports ----
         if (language === SupportedLanguages.Go && goModule && rawImportPath.startsWith(goModule.modulePath)) {
-          const pkgFiles = resolveGoPackage(rawImportPath, goModule, normalizedFileList, allFileList);
-          if (pkgFiles.length > 0) {
-            for (const pkgFile of pkgFiles) {
-              addImportEdge(file.path, pkgFile);
+          const pkgSuffix = resolveGoPackageDir(rawImportPath, goModule);
+          if (pkgSuffix) {
+            const pkgFiles = resolveGoPackage(rawImportPath, goModule, normalizedFileList, allFileList);
+            if (pkgFiles.length > 0) {
+              // Always emit graph IMPORTS edges for dependency visibility
+              for (const pkgFile of pkgFiles) {
+                addImportGraphEdge(file.path, pkgFile);
+              }
+              if (packageMap) {
+                // Store directory suffix in PackageMap for resolution (skip ImportMap expansion)
+                if (!packageMap.has(file.path)) packageMap.set(file.path, new Set());
+                packageMap.get(file.path)!.add(pkgSuffix);
+              } else {
+                // Fallback: expand into ImportMap if no PackageMap provided
+                for (const pkgFile of pkgFiles) {
+                  if (!importMap.has(file.path)) importMap.set(file.path, new Set());
+                  importMap.get(file.path)!.add(pkgFile);
+                }
+              }
+              return; // skip single-file resolution
             }
-            return; // skip single-file resolution
           }
           // Fall through if no files found (package might be external)
         }
@@ -1191,6 +1248,7 @@ export const processImportsFromExtracted = async (
   onProgress?: (current: number, total: number) => void,
   repoRoot?: string,
   prebuiltCtx?: ImportResolutionContext,
+  packageMap?: PackageMap,
 ) => {
   const ctx = prebuiltCtx ?? buildImportResolutionContext(files.map(f => f.path));
   const { allFilePaths, allFileList, normalizedFileList, suffixIndex: index, resolveCache } = ctx;
@@ -1205,7 +1263,8 @@ export const processImportsFromExtracted = async (
   const swiftPackageConfig = await loadSwiftPackageConfig(effectiveRoot);
   const csharpConfigs = await loadCSharpProjectConfig(effectiveRoot);
 
-  const addImportEdge = (filePath: string, resolvedPath: string) => {
+  // Helper: add an IMPORTS edge to the graph only (no ImportMap update)
+  const addImportGraphEdge = (filePath: string, resolvedPath: string) => {
     const sourceId = generateId('File', filePath);
     const targetId = generateId('File', resolvedPath);
     const relId = generateId('IMPORTS', `${filePath}->${resolvedPath}`);
@@ -1220,6 +1279,10 @@ export const processImportsFromExtracted = async (
       confidence: 1.0,
       reason: '',
     });
+  };
+
+  const addImportEdge = (filePath: string, resolvedPath: string) => {
+    addImportGraphEdge(filePath, resolvedPath);
 
     if (!importMap.has(filePath)) {
       importMap.set(filePath, new Set());
@@ -1308,12 +1371,27 @@ export const processImportsFromExtracted = async (
 
       // Go: handle package-level imports
       if (language === SupportedLanguages.Go && goModule && rawImportPath.startsWith(goModule.modulePath)) {
-        const pkgFiles = resolveGoPackage(rawImportPath, goModule, normalizedFileList, allFileList);
-        if (pkgFiles.length > 0) {
-          for (const pkgFile of pkgFiles) {
-            addImportEdge(filePath, pkgFile);
+        const pkgSuffix = resolveGoPackageDir(rawImportPath, goModule);
+        if (pkgSuffix) {
+          const pkgFiles = resolveGoPackage(rawImportPath, goModule, normalizedFileList, allFileList);
+          if (pkgFiles.length > 0) {
+            // Always emit graph IMPORTS edges for dependency visibility
+            for (const pkgFile of pkgFiles) {
+              addImportGraphEdge(filePath, pkgFile);
+            }
+            if (packageMap) {
+              // Store directory suffix in PackageMap for resolution (skip ImportMap expansion)
+              if (!packageMap.has(filePath)) packageMap.set(filePath, new Set());
+              packageMap.get(filePath)!.add(pkgSuffix);
+            } else {
+              // Fallback: expand into ImportMap if no PackageMap provided
+              for (const pkgFile of pkgFiles) {
+                if (!importMap.has(filePath)) importMap.set(filePath, new Set());
+                importMap.get(filePath)!.add(pkgFile);
+              }
+            }
+            continue;
           }
-          continue;
         }
       }
 

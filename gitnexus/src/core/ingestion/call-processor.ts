@@ -1,7 +1,7 @@
 import { KnowledgeGraph } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
 import { SymbolTable } from './symbol-table.js';
-import { ImportMap } from './import-processor.js';
+import { ImportMap, PackageMap } from './import-processor.js';
 import { resolveSymbol } from './symbol-resolver.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
@@ -45,6 +45,7 @@ export const processCalls = async (
   astCache: ASTCache,
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
   onProgress?: (current: number, total: number) => void
 ) => {
   const parser = await loadParser();
@@ -122,7 +123,8 @@ export const processCalls = async (
         calledName,
         file.path,
         symbolTable,
-        importMap
+        importMap,
+        packageMap
       );
 
       if (!resolved) return;
@@ -181,9 +183,10 @@ const resolveCallTarget = (
   calledName: string,
   currentFile: string,
   symbolTable: SymbolTable,
-  importMap: ImportMap
+  importMap: ImportMap,
+  packageMap?: PackageMap,
 ): ResolveResult | null => {
-  const resolved = resolveSymbol(calledName, currentFile, symbolTable, importMap);
+  const resolved = resolveSymbol(calledName, currentFile, symbolTable, importMap, packageMap);
   if (!resolved) return null;
 
   // Map back to ResolveResult for backward compatibility
@@ -211,6 +214,7 @@ export const processCallsFromExtracted = async (
   extractedCalls: ExtractedCall[],
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
   onProgress?: (current: number, total: number) => void
 ) => {
   // Group by file for progress reporting
@@ -239,7 +243,8 @@ export const processCallsFromExtracted = async (
         call.calledName,
         call.filePath,
         symbolTable,
-        importMap
+        importMap,
+        packageMap
       );
       if (!resolved) continue;
 
@@ -266,6 +271,7 @@ export const processRoutesFromExtracted = async (
   extractedRoutes: ExtractedRoute[],
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
   onProgress?: (current: number, total: number) => void
 ) => {
   for (let i = 0; i < extractedRoutes.length; i++) {
@@ -279,7 +285,7 @@ export const processRoutesFromExtracted = async (
 
     // Resolve controller class using shared resolveSymbol (Tier 1: same file,
     // Tier 2: import-scoped, Tier 3: global fuzzy).
-    const controllerDef = resolveSymbol(route.controllerName, route.filePath, symbolTable, importMap);
+    const controllerDef = resolveSymbol(route.controllerName, route.filePath, symbolTable, importMap, packageMap);
     if (!controllerDef) continue;
 
     // Derive confidence from where the controller was found

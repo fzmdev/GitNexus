@@ -140,7 +140,7 @@ describe('processCallsFromExtracted', () => {
     ];
 
     const onProgress = vi.fn();
-    await processCallsFromExtracted(graph, calls, symbolTable, importMap, onProgress);
+    await processCallsFromExtracted(graph, calls, symbolTable, importMap, undefined, onProgress);
 
     // Final progress call
     expect(onProgress).toHaveBeenCalledWith(1, 1);

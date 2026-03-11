@@ -219,11 +219,19 @@ export const GO_QUERIES = `
 ; Types
 (type_declaration (type_spec name: (type_identifier) @name type: (struct_type))) @definition.struct
 (type_declaration (type_spec name: (type_identifier) @name type: (interface_type))) @definition.interface
-(type_declaration (type_spec name: (type_identifier) @name)) @definition.type
 
 ; Imports
 (import_declaration (import_spec path: (interpreted_string_literal) @import.source)) @import
 (import_declaration (import_spec_list (import_spec path: (interpreted_string_literal) @import.source))) @import
+
+; Struct embedding (anonymous fields = inheritance)
+(type_declaration
+  (type_spec
+    name: (type_identifier) @heritage.class
+    type: (struct_type
+      (field_declaration_list
+        (field_declaration
+          type: (type_identifier) @heritage.extends))))) @definition.struct
 
 ; Calls
 (call_expression function: (identifier) @call.name) @call

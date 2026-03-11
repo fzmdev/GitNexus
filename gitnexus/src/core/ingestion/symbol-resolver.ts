@@ -8,7 +8,8 @@
  */
 
 import type { SymbolTable, SymbolDefinition } from './symbol-table.js';
-import type { ImportMap } from './import-processor.js';
+import type { ImportMap, PackageMap } from './import-processor.js';
+import { isFileInGoPackage } from './import-processor.js';
 
 /** Resolution tier for internal tracking, logging, and test assertions. */
 export type ResolutionTier = 'same-file' | 'import-scoped' | 'unique-global';
@@ -36,8 +37,9 @@ export const resolveSymbol = (
   currentFilePath: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
 ): SymbolDefinition | null => {
-  return resolveSymbolInternal(name, currentFilePath, symbolTable, importMap)?.definition ?? null;
+  return resolveSymbolInternal(name, currentFilePath, symbolTable, importMap, packageMap)?.definition ?? null;
 };
 
 /** Internal resolver preserving tier metadata for logging and test assertions. */
@@ -46,6 +48,7 @@ export const resolveSymbolInternal = (
   currentFilePath: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
+  packageMap?: PackageMap,
 ): InternalResolution | null => {
   // Tier 1: Same file — authoritative match
   const localDef = symbolTable.lookupExactFull(currentFilePath, name);
@@ -55,12 +58,24 @@ export const resolveSymbolInternal = (
   const allDefs = symbolTable.lookupFuzzy(name);
   if (allDefs.length === 0) return null;
 
-  // Tier 2: Import-scoped — check if any definition is in a file imported by currentFile
+  // Tier 2a: Import-scoped — check if any definition is in a file imported by currentFile
   const importedFiles = importMap.get(currentFilePath);
   if (importedFiles) {
     for (const def of allDefs) {
       if (importedFiles.has(def.filePath)) {
         return { definition: def, tier: 'import-scoped', candidateCount: allDefs.length };
+      }
+    }
+  }
+
+  // Tier 2b: Package-scoped — check if any definition is in a Go package imported by currentFile
+  const importedPackages = packageMap?.get(currentFilePath);
+  if (importedPackages) {
+    for (const def of allDefs) {
+      for (const pkgSuffix of importedPackages) {
+        if (isFileInGoPackage(def.filePath, pkgSuffix)) {
+          return { definition: def, tier: 'import-scoped', candidateCount: allDefs.length };
+        }
       }
     }
   }

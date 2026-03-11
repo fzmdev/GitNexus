@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { resolveSymbol, resolveSymbolInternal } from '../../src/core/ingestion/symbol-resolver.js';
 import { createSymbolTable } from '../../src/core/ingestion/symbol-table.js';
-import { createImportMap } from '../../src/core/ingestion/import-processor.js';
-import type { ImportMap } from '../../src/core/ingestion/import-processor.js';
+import { createImportMap, createPackageMap, isFileInGoPackage } from '../../src/core/ingestion/import-processor.js';
+import type { ImportMap, PackageMap } from '../../src/core/ingestion/import-processor.js';
 
 describe('resolveSymbol', () => {
   let symbolTable: ReturnType<typeof createSymbolTable>;
@@ -326,5 +326,108 @@ describe('lookupExactFull', () => {
 
     // Same object reference — zero additional memory
     expect(fromExact).toBe(fromFuzzy);
+  });
+});
+
+describe('isFileInGoPackage', () => {
+  it('matches .go file directly in the package directory', () => {
+    expect(isFileInGoPackage('internal/auth/handler.go', '/internal/auth/')).toBe(true);
+  });
+
+  it('matches with leading path segments', () => {
+    expect(isFileInGoPackage('myrepo/internal/auth/handler.go', '/internal/auth/')).toBe(true);
+    expect(isFileInGoPackage('src/github.com/user/repo/internal/auth/handler.go', '/internal/auth/')).toBe(true);
+  });
+
+  it('rejects files in subdirectories', () => {
+    expect(isFileInGoPackage('internal/auth/middleware/jwt.go', '/internal/auth/')).toBe(false);
+  });
+
+  it('rejects non-.go files', () => {
+    expect(isFileInGoPackage('internal/auth/README.md', '/internal/auth/')).toBe(false);
+  });
+
+  it('rejects _test.go files', () => {
+    expect(isFileInGoPackage('internal/auth/handler_test.go', '/internal/auth/')).toBe(false);
+  });
+
+  it('rejects files not in the package', () => {
+    expect(isFileInGoPackage('internal/db/connection.go', '/internal/auth/')).toBe(false);
+  });
+
+  it('handles backslash paths (Windows)', () => {
+    expect(isFileInGoPackage('internal\\auth\\handler.go', '/internal/auth/')).toBe(true);
+  });
+});
+
+describe('Tier 2b: PackageMap resolution (Go)', () => {
+  let symbolTable: ReturnType<typeof createSymbolTable>;
+  let importMap: ImportMap;
+  let packageMap: PackageMap;
+
+  beforeEach(() => {
+    symbolTable = createSymbolTable();
+    importMap = createImportMap();
+    packageMap = createPackageMap();
+  });
+
+  it('resolves symbol via PackageMap when not in ImportMap', () => {
+    symbolTable.add('internal/auth/handler.go', 'HandleLogin', 'Function:internal/auth/handler.go:HandleLogin', 'Function');
+    // No ImportMap entry — but PackageMap has the package directory
+    packageMap.set('cmd/server/main.go', new Set(['/internal/auth/']));
+
+    const result = resolveSymbolInternal('HandleLogin', 'cmd/server/main.go', symbolTable, importMap, packageMap);
+
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('import-scoped');
+    expect(result!.definition.filePath).toBe('internal/auth/handler.go');
+  });
+
+  it('does not resolve symbol from wrong package', () => {
+    symbolTable.add('internal/db/connection.go', 'Connect', 'Function:internal/db/connection.go:Connect', 'Function');
+    packageMap.set('cmd/server/main.go', new Set(['/internal/auth/']));
+
+    const result = resolveSymbolInternal('Connect', 'cmd/server/main.go', symbolTable, importMap, packageMap);
+
+    // Not in imported package, and not unique global (only 1 def) → unique-global
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('unique-global');
+  });
+
+  it('Tier 2a (ImportMap) takes precedence over Tier 2b (PackageMap)', () => {
+    symbolTable.add('internal/auth/handler.go', 'Validate', 'Function:internal/auth/handler.go:Validate', 'Function');
+    symbolTable.add('internal/db/validator.go', 'Validate', 'Function:internal/db/validator.go:Validate', 'Function');
+
+    // ImportMap points to db, PackageMap points to auth
+    importMap.set('cmd/server/main.go', new Set(['internal/db/validator.go']));
+    packageMap.set('cmd/server/main.go', new Set(['/internal/auth/']));
+
+    const result = resolveSymbolInternal('Validate', 'cmd/server/main.go', symbolTable, importMap, packageMap);
+
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('import-scoped');
+    expect(result!.definition.filePath).toBe('internal/db/validator.go');
+  });
+
+  it('resolves both symbols in same imported package (first match wins)', () => {
+    symbolTable.add('internal/auth/handler.go', 'Run', 'Function:internal/auth/handler.go:Run', 'Function');
+    symbolTable.add('internal/auth/worker.go', 'Run', 'Function:internal/auth/worker.go:Run', 'Function');
+    packageMap.set('cmd/main.go', new Set(['/internal/auth/']));
+
+    const result = resolveSymbolInternal('Run', 'cmd/main.go', symbolTable, importMap, packageMap);
+
+    // Both match the package — returns first match as import-scoped
+    expect(result).not.toBeNull();
+    expect(result!.tier).toBe('import-scoped');
+  });
+
+  it('returns null without packageMap (backward compat)', () => {
+    symbolTable.add('internal/auth/handler.go', 'X', 'Function:internal/auth/handler.go:X', 'Function');
+    symbolTable.add('internal/db/handler.go', 'X', 'Function:internal/db/handler.go:X', 'Function');
+
+    // No importMap entry, no packageMap → ambiguous
+    const result = resolveSymbolInternal('X', 'cmd/main.go', symbolTable, importMap);
+
+    expect(result).toBeNull();
   });
 });

@@ -853,12 +853,21 @@ const processFileGroup = (
       // Extract heritage (extends/implements)
       if (captureMap['heritage.class']) {
         if (captureMap['heritage.extends']) {
-          result.heritage.push({
-            filePath: file.path,
-            className: captureMap['heritage.class'].text,
-            parentName: captureMap['heritage.extends'].text,
-            kind: 'extends',
-          });
+          // Go struct embedding: the query matches ALL field_declarations with
+          // type_identifier, but only anonymous fields (no name) are embedded.
+          // Named fields like `Breed string` also match — skip them.
+          const extendsNode = captureMap['heritage.extends'];
+          const fieldDecl = extendsNode.parent;
+          const isNamedField = fieldDecl?.type === 'field_declaration'
+            && fieldDecl.childForFieldName('name');
+          if (!isNamedField) {
+            result.heritage.push({
+              filePath: file.path,
+              className: captureMap['heritage.class'].text,
+              parentName: captureMap['heritage.extends'].text,
+              kind: 'extends',
+            });
+          }
         }
         if (captureMap['heritage.implements']) {
           result.heritage.push({

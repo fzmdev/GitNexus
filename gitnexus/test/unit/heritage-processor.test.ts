@@ -292,7 +292,7 @@ describe('processHeritageFromExtracted', () => {
     ];
 
     const onProgress = vi.fn();
-    await processHeritageFromExtracted(graph, heritage, symbolTable, importMap, onProgress);
+    await processHeritageFromExtracted(graph, heritage, symbolTable, importMap, undefined, onProgress);
     expect(onProgress).toHaveBeenCalledWith(1, 1);
   });
 
