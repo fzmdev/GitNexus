@@ -41,12 +41,14 @@ describe('C# heritage resolution', () => {
     expect(implements_[0].target).toBe('IRepository');
   });
 
-  it('emits CALLS edges from CreateUser (including constructor)', () => {
+  it('emits CALLS edges from CreateUser (constructor + member calls)', () => {
     const calls = getRelationships(result, 'CALLS');
-    expect(calls.length).toBe(2);
+    expect(calls.length).toBe(4);
     const targets = edgeSet(calls);
-    expect(targets).toContain('CreateUser → Log');
-    expect(targets).toContain('CreateUser → User');
+    expect(targets).toContain('CreateUser → User');      // new User() constructor
+    expect(targets).toContain('CreateUser → Validate');   // user.Validate() — receiver-typed
+    expect(targets).toContain('CreateUser → Save');       // _repo.Save() — receiver-typed
+    expect(targets).toContain('CreateUser → Log');        // _logger.Log() — receiver-typed
   });
 
   it('resolves new User() to the User class via constructor discrimination', () => {
@@ -232,5 +234,49 @@ describe('C# primary constructor resolution', () => {
     const hasMethod = getRelationships(result, 'HAS_METHOD');
     const edge = hasMethod.find(e => e.source === 'Person' && e.target === 'Person');
     expect(edge).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Receiver-constrained resolution: typed variables disambiguate same-named methods
+// ---------------------------------------------------------------------------
+
+describe('C# receiver-constrained resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-receiver-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes, both with Save methods', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Class')).toContain('Repo');
+    const saveMethods = getNodesByLabel(result, 'Method').filter(m => m === 'Save');
+    expect(saveMethods.length).toBe(2);
+  });
+
+  it('resolves user.Save() to User.Save and repo.Save() to Repo.Save via receiver typing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCalls = calls.filter(c => c.target === 'Save');
+    expect(saveCalls.length).toBe(2);
+
+    const userSave = saveCalls.find(c => c.targetFilePath === 'Models/User.cs');
+    const repoSave = saveCalls.find(c => c.targetFilePath === 'Models/Repo.cs');
+
+    expect(userSave).toBeDefined();
+    expect(repoSave).toBeDefined();
+    expect(userSave!.source).toBe('ProcessEntities');
+    expect(repoSave!.source).toBe('ProcessEntities');
+  });
+
+  it('resolves constructor calls for both User and Repo', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const userCtor = calls.find(c => c.target === 'User');
+    const repoCtor = calls.find(c => c.target === 'Repo');
+    expect(userCtor).toBeDefined();
+    expect(repoCtor).toBeDefined();
   });
 });

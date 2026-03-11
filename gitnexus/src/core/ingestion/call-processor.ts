@@ -16,7 +16,9 @@ import {
   isBuiltInOrNoise,
   countCallArguments,
   inferCallForm,
+  extractReceiverName,
 } from './utils.js';
+import { buildTypeEnv } from './type-env.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedRoute } from './workers/parse-worker.js';
 
@@ -111,6 +113,10 @@ export const processCalls = async (
       continue;
     }
 
+    // Build per-file TypeEnv for receiver resolution
+    const lang = getLanguageFromFilename(file.path);
+    const typeEnv = lang ? buildTypeEnv(tree, lang) : new Map<string, string>();
+
     // 3. Process each call match
     matches.forEach(match => {
       const captureMap: Record<string, any> = {};
@@ -128,12 +134,16 @@ export const processCalls = async (
       if (isBuiltInOrNoise(calledName)) return;
 
       const callNode = captureMap['call'];
+      const callForm = inferCallForm(callNode, nameNode);
+      const receiverName = callForm === 'member' ? extractReceiverName(nameNode) : undefined;
+      const receiverTypeName = receiverName ? typeEnv.get(receiverName) : undefined;
 
       // 4. Resolve the target using priority strategy (returns confidence)
       const resolved = resolveCallTarget({
         calledName,
         argCount: countCallArguments(callNode),
-        callForm: inferCallForm(callNode, nameNode),
+        callForm,
+        receiverTypeName,
       }, file.path, symbolTable, importMap, packageMap);
 
       if (!resolved) return;
@@ -286,11 +296,12 @@ const toResolveResult = (
  * A. Narrow candidates by scope tier (same-file, import-scoped, unique-global)
  * B. Filter to callable symbol kinds (constructor-aware when callForm is set)
  * C. Apply arity filtering when parameter metadata is available
+ * D. Apply receiver-type filtering for member calls with typed receivers
  *
  * If filtering still leaves multiple candidates, refuse to emit a CALLS edge.
  */
 const resolveCallTarget = (
-  call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm'>,
+  call: Pick<ExtractedCall, 'calledName' | 'argCount' | 'callForm' | 'receiverTypeName'>,
   currentFile: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
@@ -300,6 +311,23 @@ const resolveCallTarget = (
   if (!tiered) return null;
 
   const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount, call.callForm);
+
+  // D. Receiver-type filtering: for member calls with a known receiver type,
+  // filter candidates by ownerId matching the resolved type's nodeId
+  if (call.callForm === 'member' && call.receiverTypeName && filteredCandidates.length > 1) {
+    const typeDefs = symbolTable.lookupFuzzy(call.receiverTypeName);
+    if (typeDefs.length > 0) {
+      const typeNodeIds = new Set(typeDefs.map(d => d.nodeId));
+      const ownerFiltered = filteredCandidates.filter(c => c.ownerId && typeNodeIds.has(c.ownerId));
+      if (ownerFiltered.length === 1) {
+        return toResolveResult(ownerFiltered[0], tiered.tier);
+      }
+      // If receiver filtering narrows to 0, fall through to name-only resolution
+      // If still 2+, refuse (don't guess)
+      if (ownerFiltered.length > 1) return null;
+    }
+  }
+
   if (filteredCandidates.length !== 1) return null;
 
   return toResolveResult(filteredCandidates[0], tiered.tier);

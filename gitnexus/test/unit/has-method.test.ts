@@ -362,8 +362,9 @@ struct Vector2 {
   });
 
   describe('Go', () => {
-    it('returns null for Go methods (not nested in class AST)', () => {
-      // Go methods are top-level declarations with receiver, not nested in a class node
+    it('returns receiver struct ID for Go methods', () => {
+      // Go methods have receiver parameter: func (s *Server) Start() {}
+      // findEnclosingClassId extracts the receiver type to link method → struct
       const tree = parseCode(Go, `
 package main
 
@@ -379,8 +380,9 @@ func (s *Server) Start() {}
       const nameNode = findNode(methodNode!, n => n.type === 'field_identifier' && n.text === 'Start');
       if (nameNode) {
         const result = findEnclosingClassId(nameNode, 'test/server.go');
-        // Go methods are not nested inside struct declarations, so this should be null
-        expect(result).toBeNull();
+        expect(result).not.toBeNull();
+        // Should generate a Struct ID for "Server"
+        expect(result).toContain('Server');
       }
     });
   });

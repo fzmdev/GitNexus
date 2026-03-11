@@ -200,3 +200,44 @@ describe('Rust struct literal resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Receiver-constrained resolution: typed variables disambiguate same-named methods
+// ---------------------------------------------------------------------------
+
+describe('Rust receiver-constrained resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'rust-receiver-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo structs, both with save functions', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    expect(structs).toContain('Repo');
+    // Rust tree-sitter captures impl fns as Function nodes
+    const saveFns = getNodesByLabel(result, 'Function').filter(m => m === 'save');
+    expect(saveFns.length).toBe(2);
+  });
+
+  it('resolves user.save() to User.save and repo.save() to Repo.save via receiver typing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCalls = calls.filter(c => c.target === 'save');
+    expect(saveCalls.length).toBe(2);
+
+    const userSave = saveCalls.find(c => c.targetFilePath === 'src/user.rs');
+    const repoSave = saveCalls.find(c => c.targetFilePath === 'src/repo.rs');
+
+    expect(userSave).toBeDefined();
+    expect(repoSave).toBeDefined();
+    expect(userSave!.source).toBe('process_entities');
+    expect(repoSave!.source).toBe('process_entities');
+  });
+});
+

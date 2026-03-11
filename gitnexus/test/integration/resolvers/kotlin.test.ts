@@ -189,3 +189,40 @@ describe('Kotlin member-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Receiver-constrained resolution: typed variables disambiguate same-named methods
+// ---------------------------------------------------------------------------
+
+describe('Kotlin receiver-constrained resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-receiver-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes, both with save functions', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Class')).toContain('Repo');
+    // Kotlin tree-sitter captures all function_declaration as Function
+    const saveFns = getNodesByLabel(result, 'Function').filter(m => m === 'save');
+    expect(saveFns.length).toBe(2);
+  });
+
+  it('resolves user.save() to User.save and repo.save() to Repo.save via receiver typing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCalls = calls.filter(c => c.target === 'save');
+    expect(saveCalls.length).toBe(2);
+
+    const userSave = saveCalls.find(c => c.targetFilePath === 'models/User.kt');
+    const repoSave = saveCalls.find(c => c.targetFilePath === 'models/Repo.kt');
+
+    expect(userSave).toBeDefined();
+    expect(repoSave).toBeDefined();
+    expect(userSave!.source).toBe('processEntities');
+    expect(repoSave!.source).toBe('processEntities');
+  });
+});
+

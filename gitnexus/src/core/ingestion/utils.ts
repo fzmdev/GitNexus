@@ -267,10 +267,29 @@ export const CONTAINER_TYPE_TO_LABEL: Record<string, string> = {
   protocol_declaration: 'Interface',
 };
 
-/** Walk up AST to find enclosing class/struct/interface/impl, return its generateId or null. */
+/** Walk up AST to find enclosing class/struct/interface/impl, return its generateId or null.
+ *  For Go method_declaration nodes, extracts receiver type (e.g. `func (u *User) Save()` → User struct). */
 export const findEnclosingClassId = (node: any, filePath: string): string | null => {
   let current = node.parent;
   while (current) {
+    // Go: method_declaration has a receiver parameter with the struct type
+    if (current.type === 'method_declaration') {
+      const receiver = current.childForFieldName?.('receiver');
+      if (receiver) {
+        // receiver is a parameter_list: (u *User) or (u User)
+        const paramDecl = receiver.namedChildren?.find?.((c: any) => c.type === 'parameter_declaration');
+        if (paramDecl) {
+          const typeNode = paramDecl.childForFieldName?.('type');
+          if (typeNode) {
+            // Unwrap pointer_type (*User → User)
+            const inner = typeNode.type === 'pointer_type' ? typeNode.firstNamedChild : typeNode;
+            if (inner && (inner.type === 'type_identifier' || inner.type === 'identifier')) {
+              return generateId('Struct', `${filePath}:${inner.text}`);
+            }
+          }
+        }
+      }
+    }
     if (CLASS_CONTAINER_TYPES.has(current.type)) {
       // Rust impl_item: for `impl Trait for Struct {}`, pick the type after `for`
       if (current.type === 'impl_item') {
@@ -671,7 +690,8 @@ export const extractReceiverName = (
   receiver = parent.childForFieldName('object')       // TS/JS member_expression, Python attribute, PHP, Java
     ?? parent.childForFieldName('value')               // Rust field_expression
     ?? parent.childForFieldName('operand')             // Go selector_expression
-    ?? parent.childForFieldName('expression');          // C# member_access_expression
+    ?? parent.childForFieldName('expression')          // C# member_access_expression
+    ?? parent.childForFieldName('argument');            // C++ field_expression
 
   // Java method_invocation: 'object' field is on the callNode, not on nameNode's parent
   if (!receiver && callNode.type === 'method_invocation') {

@@ -234,8 +234,9 @@ const processParsingSequential = async (
 
       graph.addNode(node);
 
-      // Compute enclosing class for Method/Constructor/Property — used for both ownerId and HAS_METHOD
-      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property';
+      // Compute enclosing class for Method/Constructor/Property/Function — used for both ownerId and HAS_METHOD
+      // Function is included because Kotlin/Rust/Python capture class methods as Function nodes
+      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
       const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNodeForRange, file.path) : null;
 
       symbolTable.add(file.path, nodeName, nodeId, nodeLabel, {

@@ -215,3 +215,43 @@ describe('Go struct literal resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Receiver-constrained resolution: typed variables disambiguate same-named methods
+// ---------------------------------------------------------------------------
+
+describe('Go receiver-constrained resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'go-receiver-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo structs, both with Save methods', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    expect(structs).toContain('Repo');
+    const saveMethods = getNodesByLabel(result, 'Method').filter(m => m === 'Save');
+    expect(saveMethods.length).toBe(2);
+  });
+
+  it('resolves user.Save() to User.Save and repo.Save() to Repo.Save via receiver typing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCalls = calls.filter(c => c.target === 'Save');
+    expect(saveCalls.length).toBe(2);
+
+    const userSave = saveCalls.find(c => c.targetFilePath === 'models/user.go');
+    const repoSave = saveCalls.find(c => c.targetFilePath === 'models/repo.go');
+
+    expect(userSave).toBeDefined();
+    expect(repoSave).toBeDefined();
+    expect(userSave!.source).toBe('processEntities');
+    expect(repoSave!.source).toBe('processEntities');
+  });
+});
+

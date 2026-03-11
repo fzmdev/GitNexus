@@ -32,6 +32,7 @@ import {
   inferCallForm,
   extractReceiverName
 } from '../utils.js';
+import { buildTypeEnv } from '../type-env.js';
 import { isNodeExported } from '../export-detection.js';
 import { detectFrameworkFromAST } from '../framework-detection.js';
 import { generateId } from '../../../lib/utils.js';
@@ -92,6 +93,8 @@ export interface ExtractedCall {
   callForm?: 'free' | 'member' | 'constructor';
   /** Simple identifier of the receiver for member calls (e.g., 'user' in user.save()) */
   receiverName?: string;
+  /** Resolved type name of the receiver (e.g., 'User' for user.save() when user: User) */
+  receiverTypeName?: string;
 }
 
 export interface ExtractedHeritage {
@@ -826,6 +829,9 @@ const processFileGroup = (
     result.fileCount++;
     onFileProcessed?.();
 
+    // Build per-file TypeEnv from explicit type annotations (for receiver resolution)
+    const typeEnv = buildTypeEnv(tree, language);
+
     let matches;
     try {
       matches = query.matches(tree.rootNode);
@@ -864,6 +870,7 @@ const processFileGroup = (
               || generateId('File', file.path);
             const callForm = inferCallForm(callNode, callNameNode);
             const receiverName = callForm === 'member' ? extractReceiverName(callNameNode) : undefined;
+            const receiverTypeName = receiverName ? typeEnv.get(receiverName) : undefined;
             result.calls.push({
               filePath: file.path,
               calledName,
@@ -871,6 +878,7 @@ const processFileGroup = (
               argCount: countCallArguments(callNode),
               ...(callForm !== undefined ? { callForm } : {}),
               ...(receiverName !== undefined ? { receiverName } : {}),
+              ...(receiverTypeName !== undefined ? { receiverTypeName } : {}),
             });
           }
         }
@@ -969,8 +977,9 @@ const processFileGroup = (
         },
       });
 
-      // Compute enclosing class for Method/Constructor/Property — used for both ownerId and HAS_METHOD
-      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property';
+      // Compute enclosing class for Method/Constructor/Property/Function — used for both ownerId and HAS_METHOD
+      // Function is included because Kotlin/Rust/Python capture class methods as Function nodes
+      const needsOwner = nodeLabel === 'Method' || nodeLabel === 'Constructor' || nodeLabel === 'Property' || nodeLabel === 'Function';
       const enclosingClassId = needsOwner ? findEnclosingClassId(nameNode || definitionNode, file.path) : null;
 
       result.symbols.push({

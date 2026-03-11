@@ -197,3 +197,39 @@ describe('C++ constructor-call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Receiver-constrained resolution: typed variables disambiguate same-named methods
+// ---------------------------------------------------------------------------
+
+describe('C++ receiver-constrained resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'cpp-receiver-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes, both with save methods', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Class')).toContain('Repo');
+    const saveMethods = getNodesByLabel(result, 'Method').filter(m => m === 'save');
+    expect(saveMethods.length).toBe(2);
+  });
+
+  it('resolves user.save() to User.save and repo.save() to Repo.save via receiver typing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCalls = calls.filter(c => c.target === 'save');
+    expect(saveCalls.length).toBe(2);
+
+    const userSave = saveCalls.find(c => c.targetFilePath === 'user.h');
+    const repoSave = saveCalls.find(c => c.targetFilePath === 'repo.h');
+
+    expect(userSave).toBeDefined();
+    expect(repoSave).toBeDefined();
+    expect(userSave!.source).toBe('processEntities');
+    expect(repoSave!.source).toBe('processEntities');
+  });
+});
+
