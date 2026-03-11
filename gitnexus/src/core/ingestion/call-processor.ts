@@ -1,8 +1,8 @@
 import { KnowledgeGraph } from '../graph/types.js';
 import { ASTCache } from './ast-cache.js';
 import type { SymbolDefinition, SymbolTable } from './symbol-table.js';
-import { ImportMap, PackageMap, isFileInPackageDir } from './import-processor.js';
-import { resolveSymbol } from './symbol-resolver.js';
+import { ImportMap, PackageMap, NamedImportMap, isFileInPackageDir } from './import-processor.js';
+import { resolveSymbol, resolveSymbolInternal } from './symbol-resolver.js';
 import Parser from 'tree-sitter';
 import { isLanguageAvailable, loadParser, loadLanguage } from '../tree-sitter/parser-loader.js';
 import { LANGUAGE_QUERIES } from './tree-sitter-queries.js';
@@ -18,7 +18,7 @@ import {
   inferCallForm,
   extractReceiverName,
 } from './utils.js';
-import { buildTypeEnv } from './type-env.js';
+import { buildTypeEnv, lookupTypeEnv } from './type-env.js';
 import { getTreeSitterBufferSize } from './constants.js';
 import type { ExtractedCall, ExtractedRoute } from './workers/parse-worker.js';
 
@@ -57,7 +57,8 @@ export const processCalls = async (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  namedImportMap?: NamedImportMap,
 ) => {
   const parser = await loadParser();
   const logSkipped = isVerboseIngestionEnabled();
@@ -115,7 +116,7 @@ export const processCalls = async (
 
     // Build per-file TypeEnv for receiver resolution
     const lang = getLanguageFromFilename(file.path);
-    const typeEnv = lang ? buildTypeEnv(tree, lang) : new Map<string, string>();
+    const typeEnv = lang ? buildTypeEnv(tree, lang) : new Map();
 
     // 3. Process each call match
     matches.forEach(match => {
@@ -136,7 +137,7 @@ export const processCalls = async (
       const callNode = captureMap['call'];
       const callForm = inferCallForm(callNode, nameNode);
       const receiverName = callForm === 'member' ? extractReceiverName(nameNode) : undefined;
-      const receiverTypeName = receiverName ? typeEnv.get(receiverName) : undefined;
+      const receiverTypeName = receiverName ? lookupTypeEnv(typeEnv, receiverName, callNode) : undefined;
 
       // 4. Resolve the target using priority strategy (returns confidence)
       const resolved = resolveCallTarget({
@@ -144,7 +145,7 @@ export const processCalls = async (
         argCount: countCallArguments(callNode),
         callForm,
         receiverTypeName,
-      }, file.path, symbolTable, importMap, packageMap);
+      }, file.path, symbolTable, importMap, packageMap, namedImportMap);
 
       if (!resolved) return;
 
@@ -208,6 +209,7 @@ const collectTieredCandidates = (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
+  namedImportMap?: NamedImportMap,
 ): TieredCandidates | null => {
   const allDefs = symbolTable.lookupFuzzy(calledName);
   if (allDefs.length === 0) return null;
@@ -217,6 +219,19 @@ const collectTieredCandidates = (
   const localDefs = allDefs.filter(def => def.filePath === currentFile);
   if (localDefs.length > 0) {
     return { candidates: localDefs, tier: 'same-file' };
+  }
+
+  // Tier 2a-named: If the file has a named binding for this name, restrict to that source
+  const namedBindings = namedImportMap?.get(currentFile);
+  if (namedBindings) {
+    const boundSourceFile = namedBindings.get(calledName);
+    if (boundSourceFile) {
+      const boundDefs = allDefs.filter(def => def.filePath === boundSourceFile);
+      if (boundDefs.length > 0) {
+        return { candidates: boundDefs, tier: 'import-scoped' };
+      }
+      // Named binding exists but no matching def in source file → fall through
+    }
   }
 
   const importedFiles = importMap.get(currentFile);
@@ -306,8 +321,9 @@ const resolveCallTarget = (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
+  namedImportMap?: NamedImportMap,
 ): ResolveResult | null => {
-  const tiered = collectTieredCandidates(call.calledName, currentFile, symbolTable, importMap, packageMap);
+  const tiered = collectTieredCandidates(call.calledName, currentFile, symbolTable, importMap, packageMap, namedImportMap);
   if (!tiered) return null;
 
   const filteredCandidates = filterCallableCandidates(tiered.candidates, call.argCount, call.callForm);
@@ -344,7 +360,8 @@ export const processCallsFromExtracted = async (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
-  onProgress?: (current: number, total: number) => void
+  onProgress?: (current: number, total: number) => void,
+  namedImportMap?: NamedImportMap,
 ) => {
   // Group by file for progress reporting
   const byFile = new Map<string, ExtractedCall[]>();
@@ -373,7 +390,8 @@ export const processCallsFromExtracted = async (
         call.filePath,
         symbolTable,
         importMap,
-        packageMap
+        packageMap,
+        namedImportMap,
       );
       if (!resolved) continue;
 
@@ -412,18 +430,16 @@ export const processRoutesFromExtracted = async (
 
     if (!route.controllerName || !route.methodName) continue;
 
-    // Resolve controller class using shared resolveSymbol (Tier 1: same file,
-    // Tier 2: import-scoped, Tier 3: global fuzzy).
-    const controllerDef = resolveSymbol(route.controllerName, route.filePath, symbolTable, importMap, packageMap);
-    if (!controllerDef) continue;
+    // Resolve controller class using shared resolver (Tier 1: same file,
+    // Tier 2: import-scoped, Tier 3: unique global).
+    const resolution = resolveSymbolInternal(route.controllerName, route.filePath, symbolTable, importMap, packageMap);
+    if (!resolution) continue;
 
-    // Derive confidence from where the controller was found
-    const importedFiles = importMap.get(route.filePath);
-    const isImportedController = importedFiles?.has(controllerDef.filePath) ?? false;
-    const allControllerDefs = symbolTable.lookupFuzzy(route.controllerName);
-    const confidence = isImportedController
-      ? 0.9
-      : allControllerDefs.length === 1 ? 0.7 : 0.5;
+    const controllerDef = resolution.definition;
+    // Derive confidence from the resolution tier
+    const confidence = resolution.tier === 'same-file' ? 0.95
+      : resolution.tier === 'import-scoped' ? 0.9
+      : 0.7;
 
     // Find the method on the controller
     const methodId = symbolTable.lookupExact(controllerDef.filePath, route.methodName);

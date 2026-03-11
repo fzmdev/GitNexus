@@ -1,17 +1,60 @@
 import type { SyntaxNode } from './utils.js';
+import { FUNCTION_NODE_TYPES, extractFunctionName } from './utils.js';
 
 /**
- * Per-file type environment: maps variable/parameter names to their
- * explicitly annotated type names. Built from tree-sitter AST during parsing,
- * discarded after each file.
+ * Per-file scoped type environment: maps (scope, variableName) → typeName.
+ * Scope-aware: variables inside functions are keyed by function name,
+ * file-level variables use the '' (empty string) scope.
  *
  * Design constraints:
  * - Explicit-only: only type annotations, never inferred types
- * - Scope-unaware: flat map (last-write-wins within a file)
+ * - Scope-aware: function-local variables don't collide across functions
  * - Conservative: complex/generic types extract the base name only
  * - Per-file: built once, used for receiver resolution, then discarded
  */
-export type TypeEnv = Map<string, string>;
+export type TypeEnv = Map<string, Map<string, string>>;
+
+/** File-level scope key */
+const FILE_SCOPE = '';
+
+/**
+ * Look up a variable's type in the TypeEnv, trying the call's enclosing
+ * function scope first, then falling back to file-level scope.
+ */
+export const lookupTypeEnv = (
+  env: TypeEnv,
+  varName: string,
+  callNode: SyntaxNode,
+): string | undefined => {
+  // Determine the enclosing function scope for the call
+  const scopeKey = findEnclosingScopeKey(callNode);
+
+  // Try function-local scope first
+  if (scopeKey) {
+    const scopeEnv = env.get(scopeKey);
+    if (scopeEnv) {
+      const result = scopeEnv.get(varName);
+      if (result) return result;
+    }
+  }
+
+  // Fall back to file-level scope
+  const fileEnv = env.get(FILE_SCOPE);
+  return fileEnv?.get(varName);
+};
+
+/** Find the enclosing function name for scope lookup. */
+const findEnclosingScopeKey = (node: SyntaxNode): string | undefined => {
+  let current = node.parent;
+  while (current) {
+    if (FUNCTION_NODE_TYPES.has(current.type)) {
+      const { funcName } = extractFunctionName(current);
+      if (funcName) return funcName;
+    }
+    current = current.parent;
+  }
+  return undefined;
+};
 
 /**
  * Extract the simple type name from a type AST node.
@@ -128,16 +171,16 @@ const TYPED_PARAMETER_TYPES = new Set([
 ]);
 
 /**
- * Build a TypeEnv from a tree-sitter AST for a given language.
- * Walks the tree looking for variable declarations and function parameters
- * with explicit type annotations. Returns a Map<variableName, typeName>.
+ * Build a scoped TypeEnv from a tree-sitter AST for a given language.
+ * Walks the tree tracking enclosing function scopes, so that variables
+ * inside different functions don't collide.
  */
 export const buildTypeEnv = (
   tree: { rootNode: SyntaxNode },
   language: string,
 ): TypeEnv => {
   const env: TypeEnv = new Map();
-  walkForTypes(tree.rootNode, language, env);
+  walkForTypes(tree.rootNode, language, env, FILE_SCOPE);
   return env;
 };
 
@@ -145,14 +188,26 @@ const walkForTypes = (
   node: SyntaxNode,
   language: string,
   env: TypeEnv,
+  currentScope: string,
 ): void => {
+  // Detect scope boundaries (function/method definitions)
+  let scope = currentScope;
+  if (FUNCTION_NODE_TYPES.has(node.type)) {
+    const { funcName } = extractFunctionName(node);
+    if (funcName) scope = funcName;
+  }
+
+  // Get or create the sub-map for this scope
+  if (!env.has(scope)) env.set(scope, new Map());
+  const scopeEnv = env.get(scope)!;
+
   // Check if this node provides type information
-  extractTypeBinding(node, language, env);
+  extractTypeBinding(node, language, scopeEnv);
 
   // Recurse into children
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (child) walkForTypes(child, language, env);
+    if (child) walkForTypes(child, language, env, scope);
   }
 };
 
@@ -163,7 +218,7 @@ const walkForTypes = (
 const extractTypeBinding = (
   node: SyntaxNode,
   language: string,
-  env: TypeEnv,
+  env: Map<string, string>,
 ): void => {
   // === PARAMETERS (most languages) ===
   if (TYPED_PARAMETER_TYPES.has(node.type)) {
@@ -267,7 +322,7 @@ const extractTypeBinding = (
 // ── Language-specific extractors ──────────────────────────────────────────
 
 /** TypeScript: const x: Foo = ..., let x: Foo */
-const extractFromTsDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromTsDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   for (let i = 0; i < node.namedChildCount; i++) {
     const declarator = node.namedChild(i);
     if (declarator?.type !== 'variable_declarator') continue;
@@ -281,7 +336,7 @@ const extractFromTsDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** Java: Type x = ...; Type x; */
-const extractFromJavaDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromJavaDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   const typeNode = node.childForFieldName('type');
   if (!typeNode) return;
   const typeName = extractSimpleTypeName(typeNode);
@@ -300,7 +355,7 @@ const extractFromJavaDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** C#: Type x = ...; var x = new Type(); */
-const extractFromCSharpDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromCSharpDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   // C# tree-sitter: local_declaration_statement > variable_declaration > ...
   // Recursively descend through wrapper nodes
   for (let i = 0; i < node.namedChildCount; i++) {
@@ -359,7 +414,7 @@ const extractFromCSharpDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** Kotlin: val x: Foo = ... */
-const extractFromKotlinDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromKotlinDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   // Kotlin property_declaration: name/type are inside a variable_declaration child
   const varDecl = findChildByType(node, 'variable_declaration');
   if (varDecl) {
@@ -383,7 +438,7 @@ const extractFromKotlinDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** Rust: let x: Foo = ... */
-const extractFromRustDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromRustDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   const pattern = node.childForFieldName('pattern');
   const typeNode = node.childForFieldName('type');
   if (!pattern || !typeNode) return;
@@ -393,7 +448,7 @@ const extractFromRustDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** Go: var x Foo */
-const extractFromGoVarDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromGoVarDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   // Go var_declaration contains var_spec children
   if (node.type === 'var_declaration') {
     for (let i = 0; i < node.namedChildCount; i++) {
@@ -413,7 +468,7 @@ const extractFromGoVarDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** Go: x := Foo{...} — infer type from composite literal */
-const extractFromGoShortVarDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromGoShortVarDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   const left = node.childForFieldName('left');
   const right = node.childForFieldName('right');
   if (!left || !right) return;
@@ -438,7 +493,7 @@ const extractFromGoShortVarDeclaration = (node: SyntaxNode, env: TypeEnv): void 
 };
 
 /** Python: x: Foo = ... (PEP 484 annotations) */
-const extractFromPythonAssignment = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromPythonAssignment = (node: SyntaxNode, env: Map<string, string>): void => {
   // Python annotated assignment: left : type = value
   // tree-sitter represents this differently based on grammar version
   const left = node.childForFieldName('left');
@@ -450,7 +505,7 @@ const extractFromPythonAssignment = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** Swift: let x: Foo = ... */
-const extractFromSwiftDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromSwiftDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   // Swift property_declaration has pattern and type_annotation
   const pattern = node.childForFieldName('pattern')
     ?? findChildByType(node, 'pattern');
@@ -463,7 +518,7 @@ const extractFromSwiftDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 };
 
 /** C++: Type x = ...; Type* x; Type& x; */
-const extractFromCppDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
+const extractFromCppDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   const typeNode = node.childForFieldName('type');
   if (!typeNode) return;
   const typeName = extractSimpleTypeName(typeNode);
@@ -494,7 +549,7 @@ const extractFromCppDeclaration = (node: SyntaxNode, env: TypeEnv): void => {
 const extractFromParameter = (
   node: SyntaxNode,
   language: string,
-  env: TypeEnv,
+  env: Map<string, string>,
 ): void => {
   let nameNode: SyntaxNode | null = null;
   let typeNode: SyntaxNode | null = null;

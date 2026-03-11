@@ -250,3 +250,91 @@ describe('TypeScript receiver-constrained resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Scoped receiver resolution: same variable name in different functions
+// resolves to different types via scope-aware TypeEnv
+// ---------------------------------------------------------------------------
+
+describe('TypeScript scoped receiver resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-scoped-receiver'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes, both with save methods', () => {
+    expect(getNodesByLabel(result, 'Class')).toContain('User');
+    expect(getNodesByLabel(result, 'Class')).toContain('Repo');
+    const saveMethods = getNodesByLabel(result, 'Method').filter(m => m === 'save');
+    expect(saveMethods.length).toBe(2);
+  });
+
+  it('resolves entity.save() in handleUser to User.save and in handleRepo to Repo.save', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCalls = calls.filter(c => c.target === 'save');
+    expect(saveCalls.length).toBe(2);
+
+    const userSave = saveCalls.find(c => c.targetFilePath === 'src/user.ts');
+    const repoSave = saveCalls.find(c => c.targetFilePath === 'src/repo.ts');
+
+    expect(userSave).toBeDefined();
+    expect(repoSave).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Named import disambiguation: two files export same name, import resolves
+// ---------------------------------------------------------------------------
+
+describe('TypeScript named import disambiguation', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-named-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processInput → formatData to src/format-upper.ts via named import', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const formatCall = calls.find(c => c.target === 'formatData');
+    expect(formatCall).toBeDefined();
+    expect(formatCall!.source).toBe('processInput');
+    expect(formatCall!.targetFilePath).toBe('src/format-upper.ts');
+  });
+
+  it('emits IMPORTS edge to format-upper.ts', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    const appImport = imports.find(e => e.source === 'app.ts');
+    expect(appImport).toBeDefined();
+    expect(appImport!.targetFilePath).toBe('src/format-upper.ts');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Variadic resolution: rest params don't get filtered by arity
+// ---------------------------------------------------------------------------
+
+describe('TypeScript variadic call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-variadic-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves processInput → logEntry to src/logger.ts despite 3 args vs rest param', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const logCall = calls.find(c => c.target === 'logEntry');
+    expect(logCall).toBeDefined();
+    expect(logCall!.source).toBe('processInput');
+    expect(logCall!.targetFilePath).toBe('src/logger.ts');
+  });
+});
+

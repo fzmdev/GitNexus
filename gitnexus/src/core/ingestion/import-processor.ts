@@ -43,6 +43,66 @@ export type {
 
 const isDev = process.env.NODE_ENV === 'development';
 
+/**
+ * Extract named import bindings from an import AST node (sequential path).
+ * Returns undefined for non-named imports (namespace, default, side-effect).
+ */
+function extractNamedBindingsFromAST(
+  importNode: any,
+  language: string,
+): { local: string; exported: string }[] | undefined {
+  if (language === 'typescript' || language === 'tsx' || language === 'javascript') {
+    // import_statement > import_clause > named_imports > import_specifier*
+    const importClause = findNamedChild(importNode, 'import_clause');
+    if (!importClause) return undefined;
+    const namedImports = findNamedChild(importClause, 'named_imports');
+    if (!namedImports) return undefined;
+
+    const bindings: { local: string; exported: string }[] = [];
+    for (let i = 0; i < namedImports.namedChildCount; i++) {
+      const spec = namedImports.namedChild(i);
+      if (spec?.type !== 'import_specifier') continue;
+      const ids: string[] = [];
+      for (let j = 0; j < spec.namedChildCount; j++) {
+        const c = spec.namedChild(j);
+        if (c?.type === 'identifier') ids.push(c.text);
+      }
+      if (ids.length === 1) bindings.push({ local: ids[0], exported: ids[0] });
+      else if (ids.length === 2) bindings.push({ local: ids[1], exported: ids[0] });
+    }
+    return bindings.length > 0 ? bindings : undefined;
+  }
+
+  if (language === 'python') {
+    if (importNode.type !== 'import_from_statement') return undefined;
+    const bindings: { local: string; exported: string }[] = [];
+    const moduleNode = importNode.childForFieldName?.('module_name');
+    for (let i = 0; i < importNode.namedChildCount; i++) {
+      const child = importNode.namedChild(i);
+      if (!child) continue;
+      if (child.type === 'dotted_name' && (!moduleNode || child.id !== moduleNode.id)) {
+        bindings.push({ local: child.text, exported: child.text });
+      }
+      if (child.type === 'aliased_import') {
+        const dn = findNamedChild(child, 'dotted_name');
+        const al = findNamedChild(child, 'identifier');
+        if (dn && al) bindings.push({ local: al.text, exported: dn.text });
+      }
+    }
+    return bindings.length > 0 ? bindings : undefined;
+  }
+
+  return undefined;
+}
+
+function findNamedChild(node: any, type: string): any {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const c = node.namedChild(i);
+    if (c?.type === type) return c;
+  }
+  return null;
+}
+
 // Type: Map<FilePath, Set<ResolvedFilePath>>
 // Stores all files that a given file imports from
 export type ImportMap = Map<string, Set<string>>;
@@ -55,6 +115,14 @@ export const createImportMap = (): ImportMap => new Map();
 export type PackageMap = Map<string, Set<string>>;
 
 export const createPackageMap = (): PackageMap => new Map();
+
+// Type: Map<ImportingFilePath, Map<LocalName, ResolvedSourceFilePath>>
+// Tracks which specific names a file imports from which sources (TS/Python only).
+// Used to tighten Tier 2a resolution: `import { User } from './models'`
+// means only `User` (not `Repo`) is visible from models.ts via this import.
+export type NamedImportMap = Map<string, Map<string, string>>;
+
+export const createNamedImportMap = (): NamedImportMap => new Map();
 
 /**
  * Check if a file path is directly inside a package directory identified by its suffix.
@@ -433,6 +501,8 @@ function resolveLanguageImport(
 
 /**
  * Apply an ImportResult: emit graph edges and update ImportMap/PackageMap.
+ * If namedBindings are provided and the import resolves to a single file,
+ * also populate the NamedImportMap for precise Tier 2a resolution.
  */
 function applyImportResult(
   result: ImportResult,
@@ -441,6 +511,8 @@ function applyImportResult(
   packageMap: PackageMap | undefined,
   addImportEdge: (from: string, to: string) => void,
   addImportGraphEdge: (from: string, to: string) => void,
+  namedBindings?: { local: string; exported: string }[],
+  namedImportMap?: NamedImportMap,
 ): void {
   if (!result) return;
 
@@ -456,6 +528,16 @@ function applyImportResult(
     const files = result.files;
     for (const resolvedFile of files) {
       addImportEdge(filePath, resolvedFile);
+    }
+
+    // Record named bindings for precise Tier 2a resolution
+    if (namedBindings && namedImportMap && files.length === 1) {
+      const resolvedFile = files[0];
+      if (!namedImportMap.has(filePath)) namedImportMap.set(filePath, new Map());
+      const fileBindings = namedImportMap.get(filePath)!;
+      for (const binding of namedBindings) {
+        fileBindings.set(binding.local, resolvedFile);
+      }
     }
   }
 }
@@ -473,6 +555,7 @@ export const processImports = async (
   repoRoot?: string,
   allPaths?: string[],
   packageMap?: PackageMap,
+  namedImportMap?: NamedImportMap,
 ) => {
   // Use allPaths (full repo) when available for cross-chunk resolution, else fall back to chunk files
   const allFileList = allPaths ?? files.map(f => f.path);
@@ -607,7 +690,8 @@ export const processImports = async (
         totalImportsFound++;
 
         const result = resolveLanguageImport(file.path, rawImportPath, language, configs, ctx);
-        applyImportResult(result, file.path, importMap, packageMap, addImportEdge, addImportGraphEdge);
+        const bindings = namedImportMap ? extractNamedBindingsFromAST(captureMap['import'], language) : undefined;
+        applyImportResult(result, file.path, importMap, packageMap, addImportEdge, addImportGraphEdge, bindings, namedImportMap);
       }
     });
 
@@ -640,6 +724,7 @@ export const processImportsFromExtracted = async (
   repoRoot?: string,
   prebuiltCtx?: ImportResolutionContext,
   packageMap?: PackageMap,
+  namedImportMap?: NamedImportMap,
 ) => {
   const ctx = prebuiltCtx ?? buildImportResolutionContext(files.map(f => f.path));
   const { allFilePaths, allFileList, normalizedFileList, suffixIndex: index, resolveCache } = ctx;
@@ -705,11 +790,11 @@ export const processImportsFromExtracted = async (
       await yieldToEventLoop();
     }
 
-    for (const { rawImportPath, language } of fileImports) {
+    for (const imp of fileImports) {
       totalImportsFound++;
 
-      const result = resolveLanguageImport(filePath, rawImportPath, language as SupportedLanguages, configs, resolveCtx);
-      applyImportResult(result, filePath, importMap, packageMap, addImportEdge, addImportGraphEdge);
+      const result = resolveLanguageImport(filePath, imp.rawImportPath, imp.language as SupportedLanguages, configs, resolveCtx);
+      applyImportResult(result, filePath, importMap, packageMap, addImportEdge, addImportGraphEdge, imp.namedBindings, namedImportMap);
     }
   }
 

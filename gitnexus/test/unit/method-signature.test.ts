@@ -7,6 +7,8 @@ import Java from 'tree-sitter-java';
 import CSharp from 'tree-sitter-c-sharp';
 import Kotlin from 'tree-sitter-kotlin';
 import CPP from 'tree-sitter-cpp';
+import Go from 'tree-sitter-go';
+import Rust from 'tree-sitter-rust';
 
 describe('extractMethodSignature', () => {
   const parser = new Parser();
@@ -227,6 +229,182 @@ describe('extractMethodSignature', () => {
 
       const sig = extractMethodSignature(methodNode);
       expect(sig.parameterCount).toBe(0);
+    });
+  });
+
+  describe('Go', () => {
+    it('extracts params and single return type', () => {
+      parser.setLanguage(Go);
+      const code = `package main
+func add(a int, b int) int { return a + b }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChildren.find(c => c.type === 'function_declaration')!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBe(2);
+      expect(sig.returnType).toBe('int');
+    });
+
+    it('extracts multi-return type', () => {
+      parser.setLanguage(Go);
+      const code = `package main
+func parse(s string) (string, error) { return s, nil }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChildren.find(c => c.type === 'function_declaration')!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBe(1);
+      expect(sig.returnType).toBe('(string, error)');
+    });
+
+    it('handles no return type', () => {
+      parser.setLanguage(Go);
+      const code = `package main
+func doSomething(x int) { }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChildren.find(c => c.type === 'function_declaration')!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBe(1);
+      expect(sig.returnType).toBeUndefined();
+    });
+
+    it('marks variadic function with undefined parameterCount', () => {
+      parser.setLanguage(Go);
+      const code = `package main
+func log(args ...string) int { return 0 }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChildren.find(c => c.type === 'function_declaration')!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBeUndefined();
+      expect(sig.returnType).toBe('int');
+    });
+  });
+
+  describe('Rust', () => {
+    it('extracts return type from function', () => {
+      parser.setLanguage(Rust);
+      const code = `fn add(a: i32, b: i32) -> i32 { a + b }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBe(2);
+      expect(sig.returnType).toBe('i32');
+    });
+  });
+
+  describe('C++ return types', () => {
+    it('extracts primitive return type', () => {
+      parser.setLanguage(CPP);
+      const code = `int add(int a, int b) { return a + b; }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBe(2);
+      expect(sig.returnType).toBe('int');
+    });
+
+    it('extracts qualified return type', () => {
+      parser.setLanguage(CPP);
+      const code = `std::string getName() { return ""; }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBe(0);
+      expect(sig.returnType).toBe('std::string');
+    });
+
+    it('returns undefined returnType for void', () => {
+      parser.setLanguage(CPP);
+      const code = `void doNothing() { }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.returnType).toBeUndefined();
+    });
+
+    it('marks variadic function with undefined parameterCount', () => {
+      parser.setLanguage(CPP);
+      const code = `int printf(const char* fmt, ...) { return 0; }`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBeUndefined();
+      expect(sig.returnType).toBe('int');
+    });
+  });
+
+  describe('variadic params', () => {
+    it('Java: marks varargs with undefined parameterCount', () => {
+      parser.setLanguage(Java);
+      const code = `class Foo {
+  public void log(String fmt, Object... args) {}
+}`;
+      const tree = parser.parse(code);
+      const classNode = tree.rootNode.child(0)!;
+      const classBody = classNode.childForFieldName('body')!;
+      const methodNode = classBody.namedChild(0)!;
+
+      const sig = extractMethodSignature(methodNode);
+      expect(sig.parameterCount).toBeUndefined();
+    });
+
+    it('Python: marks *args with undefined parameterCount', () => {
+      parser.setLanguage(Python);
+      const code = `class Foo:
+    def log(self, fmt, *args):
+        pass`;
+      const tree = parser.parse(code);
+      const classNode = tree.rootNode.child(0)!;
+      const classBody = classNode.childForFieldName('body')!;
+      const methodNode = classBody.namedChild(0)!;
+
+      const sig = extractMethodSignature(methodNode);
+      expect(sig.parameterCount).toBeUndefined();
+    });
+
+    it('Python: marks **kwargs with undefined parameterCount', () => {
+      parser.setLanguage(Python);
+      const code = `class Foo:
+    def config(self, **kwargs):
+        pass`;
+      const tree = parser.parse(code);
+      const classNode = tree.rootNode.child(0)!;
+      const classBody = classNode.childForFieldName('body')!;
+      const methodNode = classBody.namedChild(0)!;
+
+      const sig = extractMethodSignature(methodNode);
+      expect(sig.parameterCount).toBeUndefined();
+    });
+
+    it('TypeScript: marks rest params with undefined parameterCount', () => {
+      parser.setLanguage(TypeScript.typescript);
+      const code = `function logEntry(...messages: string[]): void {}`;
+      const tree = parser.parse(code);
+      const funcNode = tree.rootNode.namedChild(0)!;
+
+      const sig = extractMethodSignature(funcNode);
+      expect(sig.parameterCount).toBeUndefined();
+    });
+
+    it('Kotlin: marks vararg with undefined parameterCount', () => {
+      parser.setLanguage(Kotlin);
+      const code = `object Foo {
+  fun log(vararg args: String) {}
+}`;
+      const tree = parser.parse(code);
+      const objectNode = tree.rootNode.child(0)!;
+      const classBody = objectNode.namedChild(1)!;
+      const functionNode = classBody.namedChild(0)!;
+
+      const sig = extractMethodSignature(functionNode);
+      expect(sig.parameterCount).toBeUndefined();
     });
   });
 });

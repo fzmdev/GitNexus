@@ -474,7 +474,7 @@ export const getLanguageFromFilename = (filename: string): SupportedLanguages | 
 };
 
 export interface MethodSignature {
-  parameterCount: number;
+  parameterCount: number | undefined;
   returnType: string | undefined;
 }
 
@@ -489,14 +489,24 @@ const CALL_ARGUMENT_LIST_TYPES = new Set([
  * Works across languages by looking for common AST patterns.
  */
 export const extractMethodSignature = (node: SyntaxNode | null | undefined): MethodSignature => {
-  let parameterCount = 0;
+  let parameterCount: number | undefined = 0;
   let returnType: string | undefined;
+  let isVariadic = false;
 
   if (!node) return { parameterCount, returnType };
 
   const paramListTypes = new Set([
     'formal_parameters', 'parameters', 'parameter_list',
     'function_parameters', 'method_parameters', 'function_value_parameters',
+  ]);
+
+  // Node types that indicate variadic/rest parameters
+  const VARIADIC_PARAM_TYPES = new Set([
+    'variadic_parameter_declaration',  // Go: ...string
+    'variadic_parameter',              // Rust: extern "C" fn(...)
+    'spread_parameter',                // Java: Object... args
+    'list_splat_pattern',              // Python: *args
+    'dictionary_splat_pattern',        // Python: **kwargs
   ]);
 
   const findParameterList = (current: SyntaxNode): SyntaxNode | null => {
@@ -523,18 +533,78 @@ export const extractMethodSignature = (node: SyntaxNode | null | undefined): Met
           param.type === 'self_parameter') {
         continue;
       }
+      // Check for variadic parameter types
+      if (VARIADIC_PARAM_TYPES.has(param.type)) {
+        isVariadic = true;
+        continue;
+      }
+      // TypeScript/JavaScript: rest parameter — required_parameter containing rest_pattern
+      if (param.type === 'required_parameter' || param.type === 'optional_parameter') {
+        for (const child of param.children) {
+          if (child.type === 'rest_pattern') {
+            isVariadic = true;
+            break;
+          }
+        }
+        if (isVariadic) continue;
+      }
+      // Kotlin: vararg modifier on a regular parameter
+      if (param.type === 'parameter' || param.type === 'formal_parameter') {
+        const prev = param.previousSibling;
+        if (prev?.type === 'parameter_modifiers' && prev.text.includes('vararg')) {
+          isVariadic = true;
+        }
+      }
       parameterCount++;
+    }
+    // C/C++: bare `...` token in parameter list (not a named child — check all children)
+    if (!isVariadic) {
+      for (const child of parameterList.children) {
+        if (!child.isNamed && child.text === '...') {
+          isVariadic = true;
+          break;
+        }
+      }
     }
   }
 
-  // Go uses a different AST structure for return types (result_type / parameter_list)
-  // so returnType will be undefined for Go methods — known gap.
-  for (const child of node.children) {
-    if (child.type === 'type_annotation' || child.type === 'return_type') {
-      const typeNode = child.children.find((c) => c.isNamed);
-      if (typeNode) returnType = typeNode.text;
+  // Return type extraction — language-specific field names
+  // Go: 'result' field is either a type_identifier or parameter_list (multi-return)
+  const goResult = node.childForFieldName?.('result');
+  if (goResult) {
+    returnType = goResult.type === 'parameter_list'
+      ? goResult.text   // multi-return: "(string, error)"
+      : goResult.text;  // single return: "int"
+  }
+
+  // Rust: 'return_type' field — the value IS the type node (e.g. primitive_type, type_identifier).
+  // Skip if the node is a type_annotation (TS/Python), which is handled by the generic loop below.
+  if (!returnType) {
+    const rustReturn = node.childForFieldName?.('return_type');
+    if (rustReturn && rustReturn.type !== 'type_annotation') {
+      returnType = rustReturn.text;
     }
   }
+
+  // C/C++: 'type' field on function_definition
+  if (!returnType) {
+    const cppType = node.childForFieldName?.('type');
+    if (cppType && cppType.text !== 'void') {
+      returnType = cppType.text;
+    }
+  }
+
+  // TS/Rust/Python/C#/Kotlin: type_annotation or return_type child
+  if (!returnType) {
+    for (const child of node.children) {
+      if (child.type === 'type_annotation' || child.type === 'return_type') {
+        const typeNode = child.children.find((c) => c.isNamed);
+        if (typeNode) returnType = typeNode.text;
+      }
+    }
+  }
+
+  if (isVariadic) parameterCount = undefined;
 
   return { parameterCount, returnType };
 };

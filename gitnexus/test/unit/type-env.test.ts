@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTypeEnv } from '../../src/core/ingestion/type-env.js';
+import { buildTypeEnv, lookupTypeEnv, type TypeEnv } from '../../src/core/ingestion/type-env.js';
 import Parser from 'tree-sitter';
 import TypeScript from 'tree-sitter-typescript';
 import Java from 'tree-sitter-java';
@@ -18,37 +18,53 @@ const parse = (code: string, lang: any) => {
   return parser.parse(code);
 };
 
+/** Flatten a scoped TypeEnv into a simple name→type map (for simple test assertions). */
+function flatGet(env: TypeEnv, varName: string): string | undefined {
+  for (const [, scopeMap] of env) {
+    const val = scopeMap.get(varName);
+    if (val) return val;
+  }
+  return undefined;
+}
+
+/** Count all bindings across all scopes. */
+function flatSize(env: TypeEnv): number {
+  let count = 0;
+  for (const [, scopeMap] of env) count += scopeMap.size;
+  return count;
+}
+
 describe('buildTypeEnv', () => {
   describe('TypeScript', () => {
     it('extracts type from const declaration', () => {
       const tree = parse('const user: User = getUser();', TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from let declaration', () => {
       const tree = parse('let repo: Repository;', TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
 
     it('extracts type from function parameters', () => {
       const tree = parse('function save(user: User, repo: Repository) {}', TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      expect(env.get('user')).toBe('User');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'user')).toBe('User');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
 
     it('extracts type from arrow function parameters', () => {
       const tree = parse('const fn = (user: User) => user.save();', TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('ignores variables without type annotations', () => {
       const tree = parse('const x = 5; let y = "hello";', TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      expect(env.size).toBe(0);
+      expect(flatSize(env)).toBe(0);
     });
   });
 
@@ -63,8 +79,8 @@ describe('buildTypeEnv', () => {
         }
       `, Java);
       const env = buildTypeEnv(tree, 'java');
-      expect(env.get('user')).toBe('User');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'user')).toBe('User');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
 
     it('extracts type from method parameters', () => {
@@ -74,8 +90,8 @@ describe('buildTypeEnv', () => {
         }
       `, Java);
       const env = buildTypeEnv(tree, 'java');
-      expect(env.get('user')).toBe('User');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'user')).toBe('User');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
 
     it('extracts type from field declaration', () => {
@@ -85,7 +101,7 @@ describe('buildTypeEnv', () => {
         }
       `, Java);
       const env = buildTypeEnv(tree, 'java');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
   });
 
@@ -99,7 +115,7 @@ describe('buildTypeEnv', () => {
         }
       `, CSharp);
       const env = buildTypeEnv(tree, 'csharp');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from var with new expression', () => {
@@ -111,7 +127,7 @@ describe('buildTypeEnv', () => {
         }
       `, CSharp);
       const env = buildTypeEnv(tree, 'csharp');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from method parameters', () => {
@@ -121,8 +137,8 @@ describe('buildTypeEnv', () => {
         }
       `, CSharp);
       const env = buildTypeEnv(tree, 'csharp');
-      expect(env.get('user')).toBe('User');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'user')).toBe('User');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
   });
 
@@ -135,7 +151,7 @@ describe('buildTypeEnv', () => {
         }
       `, Go);
       const env = buildTypeEnv(tree, 'go');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from short var with composite literal', () => {
@@ -146,7 +162,7 @@ describe('buildTypeEnv', () => {
         }
       `, Go);
       const env = buildTypeEnv(tree, 'go');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from function parameters', () => {
@@ -168,7 +184,7 @@ describe('buildTypeEnv', () => {
         }
       `, Rust);
       const env = buildTypeEnv(tree, 'rust');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from function parameters', () => {
@@ -176,8 +192,8 @@ describe('buildTypeEnv', () => {
         fn process(user: User, repo: Repository) {}
       `, Rust);
       const env = buildTypeEnv(tree, 'rust');
-      expect(env.get('user')).toBe('User');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'user')).toBe('User');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
 
     it('extracts type from let with reference', () => {
@@ -187,7 +203,7 @@ describe('buildTypeEnv', () => {
         }
       `, Rust);
       const env = buildTypeEnv(tree, 'rust');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
   });
 
@@ -195,7 +211,7 @@ describe('buildTypeEnv', () => {
     it('extracts type from annotated assignment (PEP 484)', () => {
       const tree = parse('user: User = get_user()', Python);
       const env = buildTypeEnv(tree, 'python');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from function parameters', () => {
@@ -213,7 +229,7 @@ describe('buildTypeEnv', () => {
         }
       `, CPP);
       const env = buildTypeEnv(tree, 'cpp');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from initialized declaration', () => {
@@ -223,7 +239,7 @@ describe('buildTypeEnv', () => {
         }
       `, CPP);
       const env = buildTypeEnv(tree, 'cpp');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from pointer declaration', () => {
@@ -233,7 +249,7 @@ describe('buildTypeEnv', () => {
         }
       `, CPP);
       const env = buildTypeEnv(tree, 'cpp');
-      expect(env.get('user')).toBe('User');
+      expect(flatGet(env, 'user')).toBe('User');
     });
 
     it('extracts type from function parameters', () => {
@@ -241,8 +257,8 @@ describe('buildTypeEnv', () => {
         void process(User user, Repository& repo) {}
       `, CPP);
       const env = buildTypeEnv(tree, 'cpp');
-      expect(env.get('user')).toBe('User');
-      expect(env.get('repo')).toBe('Repository');
+      expect(flatGet(env, 'user')).toBe('User');
+      expect(flatGet(env, 'repo')).toBe('Repository');
     });
   });
 
@@ -253,8 +269,75 @@ describe('buildTypeEnv', () => {
       `, PHP.php);
       const env = buildTypeEnv(tree, 'php');
       // PHP parameter type extraction
-      expect(env.get('$user')).toBe('User');
-      expect(env.get('$repo')).toBe('Repository');
+      expect(flatGet(env, '$user')).toBe('User');
+      expect(flatGet(env, '$repo')).toBe('Repository');
+    });
+  });
+
+  describe('scope awareness', () => {
+    it('separates same-named variables in different functions', () => {
+      const tree = parse(`
+        function handleUser(user: User) {
+          user.save();
+        }
+        function handleRepo(user: Repo) {
+          user.save();
+        }
+      `, TypeScript.typescript);
+      const env = buildTypeEnv(tree, 'typescript');
+
+      // Each function has its own scope for 'user'
+      const handleUserScope = env.get('handleUser');
+      const handleRepoScope = env.get('handleRepo');
+      expect(handleUserScope?.get('user')).toBe('User');
+      expect(handleRepoScope?.get('user')).toBe('Repo');
+    });
+
+    it('lookupTypeEnv resolves from enclosing function scope', () => {
+      const code = `
+function handleUser(user: User) {
+  user.save();
+}
+function handleRepo(user: Repo) {
+  user.save();
+}`;
+      const tree = parse(code, TypeScript.typescript);
+      const env = buildTypeEnv(tree, 'typescript');
+
+      // Find the call nodes inside each function
+      const calls: any[] = [];
+      function findCalls(node: any) {
+        if (node.type === 'call_expression') calls.push(node);
+        for (let i = 0; i < node.childCount; i++) {
+          findCalls(node.child(i));
+        }
+      }
+      findCalls(tree.rootNode);
+
+      expect(calls.length).toBe(2);
+      // First call is inside handleUser → user should be User
+      expect(lookupTypeEnv(env, 'user', calls[0])).toBe('User');
+      // Second call is inside handleRepo → user should be Repo
+      expect(lookupTypeEnv(env, 'user', calls[1])).toBe('Repo');
+    });
+
+    it('file-level variables are accessible from all scopes', () => {
+      const tree = parse(`
+        const config: Config = getConfig();
+        function process(user: User) {
+          config.validate();
+          user.save();
+        }
+      `, TypeScript.typescript);
+      const env = buildTypeEnv(tree, 'typescript');
+
+      // config is at file-level scope
+      const fileScope = env.get('');
+      expect(fileScope?.get('config')).toBe('Config');
+
+      // user is in process scope
+      const processScope = env.get('process');
+      expect(processScope?.get('user')).toBe('User');
     });
   });
 
@@ -262,17 +345,17 @@ describe('buildTypeEnv', () => {
     it('returns empty map for code without type annotations', () => {
       const tree = parse('const x = 5;', TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      expect(env.size).toBe(0);
+      expect(flatSize(env)).toBe(0);
     });
 
-    it('last-write-wins for same variable name', () => {
+    it('last-write-wins for same variable name in same scope', () => {
       const tree = parse(`
         let x: User = getUser();
         let x: Admin = getAdmin();
       `, TypeScript.typescript);
       const env = buildTypeEnv(tree, 'typescript');
-      // Both declarations are processed; last one wins in flat map
-      expect(env.get('x')).toBeDefined();
+      // Both declarations are at file level; last one wins
+      expect(flatGet(env, 'x')).toBeDefined();
     });
   });
 });

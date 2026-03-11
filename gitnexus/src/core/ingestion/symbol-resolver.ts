@@ -8,7 +8,7 @@
  */
 
 import type { SymbolTable, SymbolDefinition } from './symbol-table.js';
-import type { ImportMap, PackageMap } from './import-processor.js';
+import type { ImportMap, PackageMap, NamedImportMap } from './import-processor.js';
 import { isFileInPackageDir } from './import-processor.js';
 
 /** Resolution tier for internal tracking, logging, and test assertions. */
@@ -38,8 +38,9 @@ export const resolveSymbol = (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
+  namedImportMap?: NamedImportMap,
 ): SymbolDefinition | null => {
-  return resolveSymbolInternal(name, currentFilePath, symbolTable, importMap, packageMap)?.definition ?? null;
+  return resolveSymbolInternal(name, currentFilePath, symbolTable, importMap, packageMap, namedImportMap)?.definition ?? null;
 };
 
 /** Internal resolver preserving tier metadata for logging and test assertions. */
@@ -49,6 +50,7 @@ export const resolveSymbolInternal = (
   symbolTable: SymbolTable,
   importMap: ImportMap,
   packageMap?: PackageMap,
+  namedImportMap?: NamedImportMap,
 ): InternalResolution | null => {
   // Tier 1: Same file — authoritative match
   const localDef = symbolTable.lookupExactFull(currentFilePath, name);
@@ -57,6 +59,21 @@ export const resolveSymbolInternal = (
   // Get all global definitions for subsequent tiers
   const allDefs = symbolTable.lookupFuzzy(name);
   if (allDefs.length === 0) return null;
+
+  // Tier 2a-named: If the current file has named import bindings for this name,
+  // restrict to that specific source file (precision over file-level ImportMap)
+  const namedBindings = namedImportMap?.get(currentFilePath);
+  if (namedBindings) {
+    const boundSourceFile = namedBindings.get(name);
+    if (boundSourceFile) {
+      const boundDefs = allDefs.filter(def => def.filePath === boundSourceFile);
+      if (boundDefs.length === 1) {
+        return { definition: boundDefs[0], tier: 'import-scoped', candidateCount: boundDefs.length };
+      }
+      if (boundDefs.length > 1) return null; // ambiguous within bound file
+      // boundDefs.length === 0 → fall through to file-level ImportMap
+    }
+  }
 
   // Tier 2a: Import-scoped — check if any definition is in a file imported by currentFile
   const importedFiles = importMap.get(currentFilePath);

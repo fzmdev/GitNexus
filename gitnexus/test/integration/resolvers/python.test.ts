@@ -192,3 +192,56 @@ describe('Python receiver-constrained resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Named import disambiguation: two modules export same name, from-import resolves
+// ---------------------------------------------------------------------------
+
+describe('Python named import disambiguation', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'python-named-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves process_input → format_data to format_upper.py via from-import', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const formatCall = calls.find(c => c.target === 'format_data');
+    expect(formatCall).toBeDefined();
+    expect(formatCall!.source).toBe('process_input');
+    expect(formatCall!.targetFilePath).toBe('format_upper.py');
+  });
+
+  it('emits IMPORTS edge to format_upper.py', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    const appImport = imports.find(e => e.source === 'app.py');
+    expect(appImport).toBeDefined();
+    expect(appImport!.targetFilePath).toBe('format_upper.py');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Variadic resolution: *args don't get filtered by arity
+// ---------------------------------------------------------------------------
+
+describe('Python variadic call resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'python-variadic-resolution'),
+      () => {},
+    );
+  }, 60000);
+
+  it('resolves process_input → log_entry to logger.py despite 3 args vs *args', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const logCall = calls.find(c => c.target === 'log_entry');
+    expect(logCall).toBeDefined();
+    expect(logCall!.source).toBe('process_input');
+    expect(logCall!.targetFilePath).toBe('logger.py');
+  });
+});
+

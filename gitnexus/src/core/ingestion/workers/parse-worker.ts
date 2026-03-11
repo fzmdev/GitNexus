@@ -32,10 +32,108 @@ import {
   inferCallForm,
   extractReceiverName
 } from '../utils.js';
-import { buildTypeEnv } from '../type-env.js';
+import { buildTypeEnv, lookupTypeEnv } from '../type-env.js';
 import { isNodeExported } from '../export-detection.js';
 import { detectFrameworkFromAST } from '../framework-detection.js';
 import { generateId } from '../../../lib/utils.js';
+
+// ============================================================================
+// Named import binding extraction
+// ============================================================================
+
+/**
+ * Extract named bindings from an import AST node.
+ * Returns undefined if the import is not a named import (e.g., import * or default).
+ *
+ * TS: import { User, Repo as R } from './models'
+ *   → [{local:'User', exported:'User'}, {local:'R', exported:'Repo'}]
+ *
+ * Python: from models import User, Repo as R
+ *   → [{local:'User', exported:'User'}, {local:'R', exported:'Repo'}]
+ */
+function extractNamedBindings(
+  importNode: any,
+  language: string,
+): { local: string; exported: string }[] | undefined {
+  if (language === 'typescript' || language === 'tsx' || language === 'javascript') {
+    return extractTsNamedBindings(importNode);
+  }
+  if (language === 'python') {
+    return extractPythonNamedBindings(importNode);
+  }
+  return undefined;
+}
+
+function extractTsNamedBindings(importNode: any): { local: string; exported: string }[] | undefined {
+  // import_statement > import_clause > named_imports > import_specifier*
+  const importClause = findChild(importNode, 'import_clause');
+  if (!importClause) return undefined;
+
+  const namedImports = findChild(importClause, 'named_imports');
+  if (!namedImports) return undefined; // default import, namespace import, or side-effect
+
+  const bindings: { local: string; exported: string }[] = [];
+  for (let i = 0; i < namedImports.namedChildCount; i++) {
+    const specifier = namedImports.namedChild(i);
+    if (specifier?.type !== 'import_specifier') continue;
+
+    // import_specifier has 1 identifier (no alias) or 2 identifiers (name + alias)
+    const identifiers: string[] = [];
+    for (let j = 0; j < specifier.namedChildCount; j++) {
+      const child = specifier.namedChild(j);
+      if (child?.type === 'identifier') identifiers.push(child.text);
+    }
+
+    if (identifiers.length === 1) {
+      bindings.push({ local: identifiers[0], exported: identifiers[0] });
+    } else if (identifiers.length === 2) {
+      // import { Foo as Bar } → exported='Foo', local='Bar'
+      bindings.push({ local: identifiers[1], exported: identifiers[0] });
+    }
+  }
+
+  return bindings.length > 0 ? bindings : undefined;
+}
+
+function extractPythonNamedBindings(importNode: any): { local: string; exported: string }[] | undefined {
+  // Only from import_from_statement, not plain import_statement
+  if (importNode.type !== 'import_from_statement') return undefined;
+
+  const bindings: { local: string; exported: string }[] = [];
+  for (let i = 0; i < importNode.namedChildCount; i++) {
+    const child = importNode.namedChild(i);
+    if (!child) continue;
+
+    if (child.type === 'dotted_name') {
+      // Skip the module_name (first dotted_name is the source module)
+      const fieldName = importNode.childForFieldName?.('module_name');
+      if (fieldName && child.id === fieldName.id) continue;
+
+      // This is an imported name: from x import User
+      const name = child.text;
+      if (name) bindings.push({ local: name, exported: name });
+    }
+
+    if (child.type === 'aliased_import') {
+      // from x import Repo as R
+      const dottedName = findChild(child, 'dotted_name');
+      const aliasIdent = findChild(child, 'identifier');
+      if (dottedName && aliasIdent) {
+        bindings.push({ local: aliasIdent.text, exported: dottedName.text });
+      }
+    }
+  }
+
+  return bindings.length > 0 ? bindings : undefined;
+}
+
+function findChild(node: any, type: string): any {
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child?.type === type) return child;
+  }
+  return null;
+}
 
 // ============================================================================
 // Types for serializable results
@@ -81,6 +179,8 @@ export interface ExtractedImport {
   filePath: string;
   rawImportPath: string;
   language: string;
+  /** Named bindings from the import (e.g., import {User as U} → [{local:'U', exported:'User'}]) */
+  namedBindings?: { local: string; exported: string }[];
 }
 
 export interface ExtractedCall {
@@ -851,10 +951,12 @@ const processFileGroup = (
         const rawImportPath = language === SupportedLanguages.Kotlin
           ? appendKotlinWildcard(captureMap['import.source'].text.replace(/['"<>]/g, ''), captureMap['import'])
           : captureMap['import.source'].text.replace(/['"<>]/g, '');
+        const namedBindings = extractNamedBindings(captureMap['import'], language);
         result.imports.push({
           filePath: file.path,
           rawImportPath,
           language: language,
+          ...(namedBindings ? { namedBindings } : {}),
         });
         continue;
       }
@@ -870,7 +972,7 @@ const processFileGroup = (
               || generateId('File', file.path);
             const callForm = inferCallForm(callNode, callNameNode);
             const receiverName = callForm === 'member' ? extractReceiverName(callNameNode) : undefined;
-            const receiverTypeName = receiverName ? typeEnv.get(receiverName) : undefined;
+            const receiverTypeName = receiverName ? lookupTypeEnv(typeEnv, receiverName, callNode) : undefined;
             result.calls.push({
               filePath: file.path,
               calledName,
