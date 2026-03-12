@@ -1,5 +1,6 @@
 import type { SyntaxNode } from './utils.js';
 import { FUNCTION_NODE_TYPES, extractFunctionName } from './utils.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
 
 /**
  * Per-file scoped type environment: maps (scope, variableName) → typeName.
@@ -156,7 +157,7 @@ const TYPED_PARAMETER_TYPES = new Set([
  */
 export const buildTypeEnv = (
   tree: { rootNode: SyntaxNode },
-  language: string,
+  language: SupportedLanguages,
 ): TypeEnv => {
   const env: TypeEnv = new Map();
   walkForTypes(tree.rootNode, language, env, FILE_SCOPE);
@@ -165,7 +166,7 @@ export const buildTypeEnv = (
 
 const walkForTypes = (
   node: SyntaxNode,
-  language: string,
+  language: SupportedLanguages,
   env: TypeEnv,
   currentScope: string,
 ): void => {
@@ -196,7 +197,7 @@ const walkForTypes = (
  */
 const extractTypeBinding = (
   node: SyntaxNode,
-  language: string,
+  language: SupportedLanguages,
   env: Map<string, string>,
 ): void => {
   // === PARAMETERS (most languages) ===
@@ -206,7 +207,7 @@ const extractTypeBinding = (
   }
 
   // === TypeScript/JavaScript: lexical_declaration / variable_declaration ===
-  if (language === 'typescript' || language === 'tsx' || language === 'javascript') {
+  if (language === SupportedLanguages.TypeScript || language === SupportedLanguages.JavaScript) {
     if (node.type === 'lexical_declaration' || node.type === 'variable_declaration') {
       extractFromTsDeclaration(node, env);
     }
@@ -214,7 +215,7 @@ const extractTypeBinding = (
   }
 
   // === Java: local_variable_declaration / field_declaration ===
-  if (language === 'java') {
+  if (language === SupportedLanguages.Java) {
     if (node.type === 'local_variable_declaration' || node.type === 'field_declaration') {
       extractFromJavaDeclaration(node, env);
     }
@@ -222,7 +223,7 @@ const extractTypeBinding = (
   }
 
   // === C# ===
-  if (language === 'csharp') {
+  if (language === SupportedLanguages.CSharp) {
     if (node.type === 'local_declaration_statement' || node.type === 'variable_declaration'
       || node.type === 'field_declaration') {
       extractFromCSharpDeclaration(node, env);
@@ -231,7 +232,7 @@ const extractTypeBinding = (
   }
 
   // === Kotlin ===
-  if (language === 'kotlin') {
+  if (language === SupportedLanguages.Kotlin) {
     if (node.type === 'property_declaration') {
       extractFromKotlinDeclaration(node, env);
     }
@@ -249,7 +250,7 @@ const extractTypeBinding = (
   }
 
   // === Rust ===
-  if (language === 'rust') {
+  if (language === SupportedLanguages.Rust) {
     if (node.type === 'let_declaration') {
       extractFromRustDeclaration(node, env);
     }
@@ -257,7 +258,7 @@ const extractTypeBinding = (
   }
 
   // === Go ===
-  if (language === 'go') {
+  if (language === SupportedLanguages.Go) {
     if (node.type === 'var_declaration' || node.type === 'var_spec') {
       extractFromGoVarDeclaration(node, env);
     }
@@ -268,7 +269,7 @@ const extractTypeBinding = (
   }
 
   // === Python ===
-  if (language === 'python') {
+  if (language === SupportedLanguages.Python) {
     if (node.type === 'assignment') {
       extractFromPythonAssignment(node, env);
     }
@@ -276,13 +277,13 @@ const extractTypeBinding = (
   }
 
   // === PHP ===
-  if (language === 'php') {
+  if (language === SupportedLanguages.PHP) {
     // PHP has no local variable type annotations; params handled above
     return;
   }
 
   // === Swift ===
-  if (language === 'swift') {
+  if (language === SupportedLanguages.Swift) {
     if (node.type === 'property_declaration') {
       extractFromSwiftDeclaration(node, env);
     }
@@ -290,7 +291,7 @@ const extractTypeBinding = (
   }
 
   // === C++ ===
-  if (language === 'cpp' || language === 'c') {
+  if (language === SupportedLanguages.CPlusPlus || language === SupportedLanguages.C) {
     if (node.type === 'declaration') {
       extractFromCppDeclaration(node, env);
     }
@@ -544,7 +545,7 @@ const extractFromCppDeclaration = (node: SyntaxNode, env: Map<string, string>): 
 /** Extract type binding from a function/method parameter node */
 const extractFromParameter = (
   node: SyntaxNode,
-  language: string,
+  language: SupportedLanguages,
   env: Map<string, string>,
 ): void => {
   let nameNode: SyntaxNode | null = null;
@@ -557,50 +558,50 @@ const extractFromParameter = (
   }
 
   // Java: formal_parameter → type name
-  else if (node.type === 'formal_parameter' && (language === 'java' || language === 'kotlin')) {
+  else if (node.type === 'formal_parameter' && (language === SupportedLanguages.Java || language === SupportedLanguages.Kotlin)) {
     typeNode = node.childForFieldName('type');
     nameNode = node.childForFieldName('name');
   }
 
   // C#: parameter → type name
-  else if (node.type === 'parameter' && language === 'csharp') {
+  else if (node.type === 'parameter' && language === SupportedLanguages.CSharp) {
     typeNode = node.childForFieldName('type');
     nameNode = node.childForFieldName('name');
   }
 
   // Rust: parameter → pattern: type
-  else if (node.type === 'parameter' && language === 'rust') {
+  else if (node.type === 'parameter' && language === SupportedLanguages.Rust) {
     nameNode = node.childForFieldName('pattern');
     typeNode = node.childForFieldName('type');
   }
 
   // Go: parameter_declaration → name type
-  else if (node.type === 'parameter' && language === 'go') {
+  else if (node.type === 'parameter' && language === SupportedLanguages.Go) {
     nameNode = node.childForFieldName('name');
     typeNode = node.childForFieldName('type');
   }
 
   // Python: typed_parameter or parameter with type
-  else if (node.type === 'parameter' && language === 'python') {
+  else if (node.type === 'parameter' && language === SupportedLanguages.Python) {
     nameNode = node.childForFieldName('name');
     typeNode = node.childForFieldName('type');
   }
 
   // PHP: simple_parameter → type $name
-  else if (node.type === 'simple_parameter' && language === 'php') {
+  else if (node.type === 'simple_parameter' && language === SupportedLanguages.PHP) {
     typeNode = node.childForFieldName('type');
     nameNode = node.childForFieldName('name');
   }
 
   // Swift: parameter → name: type
-  else if (node.type === 'parameter' && language === 'swift') {
+  else if (node.type === 'parameter' && language === SupportedLanguages.Swift) {
     nameNode = node.childForFieldName('name')
       ?? node.childForFieldName('internal_name');
     typeNode = node.childForFieldName('type');
   }
 
   // C++: parameter_declaration → type declarator
-  else if (node.type === 'parameter_declaration' && (language === 'cpp' || language === 'c')) {
+  else if (node.type === 'parameter_declaration' && (language === SupportedLanguages.CPlusPlus || language === SupportedLanguages.C)) {
     typeNode = node.childForFieldName('type');
     const declarator = node.childForFieldName('declarator');
     if (declarator) {

@@ -53,24 +53,24 @@ import { generateId } from '../../../lib/utils.js';
  */
 function extractNamedBindings(
   importNode: any,
-  language: string,
+  language: SupportedLanguages,
 ): { local: string; exported: string }[] | undefined {
-  if (language === 'typescript' || language === 'tsx' || language === 'javascript') {
+  if (language === SupportedLanguages.TypeScript || language === SupportedLanguages.JavaScript) {
     return extractTsNamedBindings(importNode);
   }
-  if (language === 'python') {
+  if (language === SupportedLanguages.Python) {
     return extractPythonNamedBindings(importNode);
   }
-  if (language === 'kotlin') {
+  if (language === SupportedLanguages.Kotlin) {
     return extractKotlinNamedBindings(importNode);
   }
-  if (language === 'rust') {
+  if (language === SupportedLanguages.Rust) {
     return extractRustNamedBindings(importNode);
   }
-  if (language === 'php') {
+  if (language === SupportedLanguages.PHP) {
     return extractPhpNamedBindings(importNode);
   }
-  if (language === 'c_sharp') {
+  if (language === SupportedLanguages.CSharp) {
     return extractCsharpNamedBindings(importNode);
   }
   return undefined;
@@ -261,7 +261,7 @@ interface ParsedNode {
     filePath: string;
     startLine: number;
     endLine: number;
-    language: string;
+    language: SupportedLanguages;
     isExported: boolean;
     astFrameworkMultiplier?: number;
     astFrameworkReason?: string;
@@ -292,7 +292,7 @@ interface ParsedSymbol {
 export interface ExtractedImport {
   filePath: string;
   rawImportPath: string;
-  language: string;
+  language: SupportedLanguages;
   /** Named bindings from the import (e.g., import {User as U} → [{local:'U', exported:'User'}]) */
   namedBindings?: { local: string; exported: string }[];
 }

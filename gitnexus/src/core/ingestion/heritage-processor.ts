@@ -44,7 +44,7 @@ const resolveExtendsType = (
   currentFilePath: string,
   symbolTable: SymbolTable,
   importMap: ImportMap,
-  language: string,
+  language: SupportedLanguages,
   packageMap?: PackageMap,
 ): { type: 'EXTENDS' | 'IMPLEMENTS'; idPrefix: string } => {
   const resolved = resolveSymbol(parentName, currentFilePath, symbolTable, importMap, packageMap);
@@ -259,7 +259,8 @@ export const processHeritageFromExtracted = async (
     const h = extractedHeritage[i];
 
     if (h.kind === 'extends') {
-      const fileLanguage = getLanguageFromFilename(h.filePath) ?? '';
+      const fileLanguage = getLanguageFromFilename(h.filePath);
+      if (!fileLanguage) continue;
       const { type: relType, idPrefix } = resolveExtendsType(h.parentName, h.filePath, symbolTable, importMap, fileLanguage, packageMap);
 
       const childId = symbolTable.lookupExact(h.filePath, h.className) ||

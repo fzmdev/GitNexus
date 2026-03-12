@@ -49,9 +49,9 @@ const isDev = process.env.NODE_ENV === 'development';
  */
 function extractNamedBindingsFromAST(
   importNode: any,
-  language: string,
+  language: SupportedLanguages,
 ): { local: string; exported: string }[] | undefined {
-  if (language === 'typescript' || language === 'tsx' || language === 'javascript') {
+  if (language === SupportedLanguages.TypeScript || language === SupportedLanguages.JavaScript) {
     // import_statement > import_clause > named_imports > import_specifier*
     const importClause = findNamedChild(importNode, 'import_clause');
     if (!importClause) return undefined;
@@ -73,7 +73,7 @@ function extractNamedBindingsFromAST(
     return bindings.length > 0 ? bindings : undefined;
   }
 
-  if (language === 'python') {
+  if (language === SupportedLanguages.Python) {
     if (importNode.type !== 'import_from_statement') return undefined;
     const bindings: { local: string; exported: string }[] = [];
     const moduleNode = importNode.childForFieldName?.('module_name');
@@ -92,7 +92,7 @@ function extractNamedBindingsFromAST(
     return bindings.length > 0 ? bindings : undefined;
   }
 
-  if (language === 'kotlin') {
+  if (language === SupportedLanguages.Kotlin) {
     if (importNode.type !== 'import_header') return undefined;
     const importAlias = findNamedChild(importNode, 'import_alias');
     if (!importAlias) return undefined;
@@ -105,7 +105,7 @@ function extractNamedBindingsFromAST(
     return [{ local: aliasIdent.text, exported: exportedName }];
   }
 
-  if (language === 'rust') {
+  if (language === SupportedLanguages.Rust) {
     if (importNode.type !== 'use_declaration') return undefined;
     const bindings: { local: string; exported: string }[] = [];
     const collectUseAs = (node: any): void => {
@@ -131,7 +131,7 @@ function extractNamedBindingsFromAST(
     return bindings.length > 0 ? bindings : undefined;
   }
 
-  if (language === 'php') {
+  if (language === SupportedLanguages.PHP) {
     if (importNode.type !== 'namespace_use_declaration') return undefined;
     const bindings: { local: string; exported: string }[] = [];
     for (let i = 0; i < importNode.namedChildCount; i++) {
@@ -152,7 +152,7 @@ function extractNamedBindingsFromAST(
     return bindings.length > 0 ? bindings : undefined;
   }
 
-  if (language === 'c_sharp') {
+  if (language === SupportedLanguages.CSharp) {
     if (importNode.type !== 'using_directive') return undefined;
     let aliasIdent: any = null;
     let qualifiedName: any = null;
@@ -871,7 +871,7 @@ export const processImportsFromExtracted = async (
     for (const imp of fileImports) {
       totalImportsFound++;
 
-      const result = resolveLanguageImport(filePath, imp.rawImportPath, imp.language as SupportedLanguages, configs, resolveCtx);
+      const result = resolveLanguageImport(filePath, imp.rawImportPath, imp.language, configs, resolveCtx);
       applyImportResult(result, filePath, importMap, packageMap, addImportEdge, addImportGraphEdge, imp.namedBindings, namedImportMap);
     }
   }

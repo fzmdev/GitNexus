@@ -8,6 +8,7 @@
  */
 
 import { findSiblingChild } from './utils.js';
+import { SupportedLanguages } from '../../config/supported-languages.js';
 
 /** C# declaration node types for sibling modifier scanning. */
 const CSHARP_DECL_TYPES = new Set([
@@ -33,13 +34,13 @@ const RUST_DECL_TYPES = new Set([
  * @param language - The programming language
  * @returns true if the symbol is exported/public
  */
-export const isNodeExported = (node: any, name: string, language: string): boolean => {
+export const isNodeExported = (node: any, name: string, language: SupportedLanguages): boolean => {
   let current = node;
 
   switch (language) {
     // JavaScript/TypeScript: Check for export keyword in ancestors
-    case 'javascript':
-    case 'typescript':
+    case SupportedLanguages.JavaScript:
+    case SupportedLanguages.TypeScript:
       while (current) {
         const type = current.type;
         if (type === 'export_statement' ||
@@ -56,12 +57,12 @@ export const isNodeExported = (node: any, name: string, language: string): boole
       return false;
 
     // Python: Public if no leading underscore (convention)
-    case 'python':
+    case SupportedLanguages.Python:
       return !name.startsWith('_');
 
     // Java: Check for 'public' modifier
     // In tree-sitter Java, modifiers are siblings of the name node, not parents
-    case 'java':
+    case SupportedLanguages.Java:
       while (current) {
         if (current.parent) {
           const parent = current.parent;
@@ -83,7 +84,7 @@ export const isNodeExported = (node: any, name: string, language: string): boole
 
     // C#: modifier nodes are SIBLINGS of the name node inside the declaration.
     // Walk up to the declaration node, then scan its direct children.
-    case 'csharp': {
+    case SupportedLanguages.CSharp: {
       while (current) {
         if (CSHARP_DECL_TYPES.has(current.type)) {
           for (let i = 0; i < current.childCount; i++) {
@@ -98,7 +99,7 @@ export const isNodeExported = (node: any, name: string, language: string): boole
     }
 
     // Go: Uppercase first letter = exported
-    case 'go':
+    case SupportedLanguages.Go:
       if (name.length === 0) return false;
       const first = name[0];
       return first === first.toUpperCase() && first !== first.toLowerCase();
@@ -106,7 +107,7 @@ export const isNodeExported = (node: any, name: string, language: string): boole
     // Rust: visibility_modifier is a SIBLING of the name node within the
     // declaration node (function_item, struct_item, etc.), not a parent.
     // Walk up to the declaration node, then scan its direct children.
-    case 'rust': {
+    case SupportedLanguages.Rust: {
       while (current) {
         if (RUST_DECL_TYPES.has(current.type)) {
           for (let i = 0; i < current.childCount; i++) {
@@ -122,7 +123,7 @@ export const isNodeExported = (node: any, name: string, language: string): boole
 
     // Kotlin: Default visibility is public (unlike Java)
     // visibility_modifier is inside modifiers, a sibling of the name node within the declaration
-    case 'kotlin':
+    case SupportedLanguages.Kotlin:
       while (current) {
         if (current.parent) {
           const visMod = findSiblingChild(current.parent, 'modifiers', 'visibility_modifier');
@@ -141,8 +142,8 @@ export const isNodeExported = (node: any, name: string, language: string): boole
     // by default, making them globally accessible (equivalent to exported).
     // Only functions explicitly marked 'static' are file-scoped (not exported).
     // C++ anonymous namespaces (namespace { ... }) also give internal linkage.
-    case 'c':
-    case 'cpp': {
+    case SupportedLanguages.C:
+    case SupportedLanguages.CPlusPlus: {
       // Walk up to the function_definition/declaration and check for 'static'
       let cur = node;
       while (cur) {
@@ -165,7 +166,7 @@ export const isNodeExported = (node: any, name: string, language: string): boole
     }
 
     // PHP: Check for visibility modifier or top-level scope
-    case 'php':
+    case SupportedLanguages.PHP:
       while (current) {
         if (current.type === 'class_declaration' ||
             current.type === 'interface_declaration' ||
@@ -182,7 +183,7 @@ export const isNodeExported = (node: any, name: string, language: string): boole
       return true;
 
     // Swift: Check for 'public' or 'open' access modifiers
-    case 'swift':
+    case SupportedLanguages.Swift:
       while (current) {
         if (current.type === 'modifiers' || current.type === 'visibility_modifier') {
           const text = current.text || '';

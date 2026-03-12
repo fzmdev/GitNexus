@@ -35,12 +35,14 @@ export type NodeLabel =
   | 'Template';
 
 
+import { SupportedLanguages } from '../../config/supported-languages.js';
+
 export type NodeProperties = {
   name: string,
   filePath: string,
   startLine?: number,
   endLine?: number,
-  language?: string,
+  language?: SupportedLanguages,
   isExported?: boolean,
   // Optional AST-derived framework hint (e.g. @Controller, @GetMapping)
   astFrameworkMultiplier?: number,
