@@ -338,3 +338,49 @@ describe('PHP receiver-constrained resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Alias import resolution: use App\Models\User as U resolves U → User
+// ---------------------------------------------------------------------------
+
+describe('PHP alias import resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'php-alias-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Main, Repo, and User classes with save and persist methods', () => {
+    expect(getNodesByLabel(result, 'Class')).toEqual(['Main', 'Repo', 'User']);
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+    expect(getNodesByLabel(result, 'Method')).toContain('persist');
+  });
+
+  it('resolves $u->save() to User.php and $r->persist() to Repo.php via alias', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    const persistCall = calls.find(c => c.target === 'persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('run');
+    expect(saveCall!.targetLabel).toBe('Method');
+    expect(saveCall!.targetFilePath).toBe('app/Models/User.php');
+
+    expect(persistCall).toBeDefined();
+    expect(persistCall!.source).toBe('run');
+    expect(persistCall!.targetLabel).toBe('Method');
+    expect(persistCall!.targetFilePath).toBe('app/Models/Repo.php');
+  });
+
+  it('emits exactly 2 IMPORTS edges via alias resolution', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    expect(imports.length).toBe(2);
+    expect(edgeSet(imports)).toEqual([
+      'Main.php → Repo.php',
+      'Main.php → User.php',
+    ]);
+  });
+});
+

@@ -92,6 +92,81 @@ function extractNamedBindingsFromAST(
     return bindings.length > 0 ? bindings : undefined;
   }
 
+  if (language === 'kotlin') {
+    if (importNode.type !== 'import_header') return undefined;
+    const importAlias = findNamedChild(importNode, 'import_alias');
+    if (!importAlias) return undefined;
+    const aliasIdent = findNamedChild(importAlias, 'simple_identifier');
+    if (!aliasIdent) return undefined;
+    const fullIdent = findNamedChild(importNode, 'identifier');
+    if (!fullIdent) return undefined;
+    const fullText = fullIdent.text;
+    const exportedName = fullText.includes('.') ? fullText.split('.').pop()! : fullText;
+    return [{ local: aliasIdent.text, exported: exportedName }];
+  }
+
+  if (language === 'rust') {
+    if (importNode.type !== 'use_declaration') return undefined;
+    const bindings: { local: string; exported: string }[] = [];
+    const collectUseAs = (node: any): void => {
+      if (node.type === 'use_as_clause') {
+        const idents: string[] = [];
+        for (let i = 0; i < node.namedChildCount; i++) {
+          const child = node.namedChild(i);
+          if (child?.type === 'identifier') idents.push(child.text);
+          if (child?.type === 'scoped_identifier') {
+            const nameNode = child.childForFieldName?.('name');
+            if (nameNode) idents.push(nameNode.text);
+          }
+        }
+        if (idents.length === 2) bindings.push({ local: idents[1], exported: idents[0] });
+        return;
+      }
+      for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (child) collectUseAs(child);
+      }
+    };
+    collectUseAs(importNode);
+    return bindings.length > 0 ? bindings : undefined;
+  }
+
+  if (language === 'php') {
+    if (importNode.type !== 'namespace_use_declaration') return undefined;
+    const bindings: { local: string; exported: string }[] = [];
+    for (let i = 0; i < importNode.namedChildCount; i++) {
+      const clause = importNode.namedChild(i);
+      if (clause?.type !== 'namespace_use_clause') continue;
+      let qualifiedName: any = null;
+      let aliasName: any = null;
+      for (let j = 0; j < clause.namedChildCount; j++) {
+        const child = clause.namedChild(j);
+        if (child?.type === 'qualified_name') qualifiedName = child;
+        else if (child?.type === 'name') aliasName = child;
+      }
+      if (!qualifiedName || !aliasName) continue;
+      const fullText = qualifiedName.text;
+      const exportedName = fullText.includes('\\') ? fullText.split('\\').pop()! : fullText;
+      bindings.push({ local: aliasName.text, exported: exportedName });
+    }
+    return bindings.length > 0 ? bindings : undefined;
+  }
+
+  if (language === 'c_sharp') {
+    if (importNode.type !== 'using_directive') return undefined;
+    let aliasIdent: any = null;
+    let qualifiedName: any = null;
+    for (let i = 0; i < importNode.namedChildCount; i++) {
+      const child = importNode.namedChild(i);
+      if (child?.type === 'identifier' && !aliasIdent) aliasIdent = child;
+      else if (child?.type === 'qualified_name') qualifiedName = child;
+    }
+    if (!aliasIdent || !qualifiedName) return undefined;
+    const fullText = qualifiedName.text;
+    const exportedName = fullText.includes('.') ? fullText.split('.').pop()! : fullText;
+    return [{ local: aliasIdent.text, exported: exportedName }];
+  }
+
   return undefined;
 }
 

@@ -245,3 +245,42 @@ describe('Python variadic call resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Alias import resolution: from x import User as U resolves U → User
+// ---------------------------------------------------------------------------
+
+describe('Python alias import resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'python-alias-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes', () => {
+    expect(getNodesByLabel(result, 'Class')).toEqual(['Repo', 'User']);
+  });
+
+  it('resolves u.save() to models.py and r.persist() to models.py via alias', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    const persistCall = calls.find(c => c.target === 'persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('main');
+    expect(saveCall!.targetFilePath).toBe('models.py');
+
+    expect(persistCall).toBeDefined();
+    expect(persistCall!.source).toBe('main');
+    expect(persistCall!.targetFilePath).toBe('models.py');
+  });
+
+  it('emits exactly 1 IMPORTS edge: app.py → models.py', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    expect(imports.length).toBe(1);
+    expect(imports[0].sourceFilePath).toBe('app.py');
+    expect(imports[0].targetFilePath).toBe('models.py');
+  });
+});

@@ -61,6 +61,18 @@ function extractNamedBindings(
   if (language === 'python') {
     return extractPythonNamedBindings(importNode);
   }
+  if (language === 'kotlin') {
+    return extractKotlinNamedBindings(importNode);
+  }
+  if (language === 'rust') {
+    return extractRustNamedBindings(importNode);
+  }
+  if (language === 'php') {
+    return extractPhpNamedBindings(importNode);
+  }
+  if (language === 'c_sharp') {
+    return extractCsharpNamedBindings(importNode);
+  }
   return undefined;
 }
 
@@ -125,6 +137,108 @@ function extractPythonNamedBindings(importNode: any): { local: string; exported:
   }
 
   return bindings.length > 0 ? bindings : undefined;
+}
+
+function extractKotlinNamedBindings(importNode: any): { local: string; exported: string }[] | undefined {
+  // import_header > identifier + import_alias > simple_identifier
+  if (importNode.type !== 'import_header') return undefined;
+
+  const importAlias = findChild(importNode, 'import_alias');
+  if (!importAlias) return undefined; // no alias → plain import, skip
+
+  const aliasIdent = findChild(importAlias, 'simple_identifier');
+  if (!aliasIdent) return undefined;
+
+  // The imported name is the full identifier; extract the last segment
+  const fullIdent = findChild(importNode, 'identifier');
+  if (!fullIdent) return undefined;
+
+  const fullText = fullIdent.text;
+  const exportedName = fullText.includes('.') ? fullText.split('.').pop()! : fullText;
+
+  return [{ local: aliasIdent.text, exported: exportedName }];
+}
+
+function extractRustNamedBindings(importNode: any): { local: string; exported: string }[] | undefined {
+  // use_declaration may contain use_as_clause at any depth
+  if (importNode.type !== 'use_declaration') return undefined;
+
+  const bindings: { local: string; exported: string }[] = [];
+  collectUseAsClauses(importNode, bindings);
+  return bindings.length > 0 ? bindings : undefined;
+}
+
+function collectUseAsClauses(node: any, bindings: { local: string; exported: string }[]): void {
+  if (node.type === 'use_as_clause') {
+    // First identifier = exported name, second identifier = local alias
+    const idents: string[] = [];
+    for (let i = 0; i < node.namedChildCount; i++) {
+      const child = node.namedChild(i);
+      if (child?.type === 'identifier') idents.push(child.text);
+      // For scoped_identifier, extract the last segment
+      if (child?.type === 'scoped_identifier') {
+        const nameNode = child.childForFieldName?.('name');
+        if (nameNode) idents.push(nameNode.text);
+      }
+    }
+    if (idents.length === 2) {
+      bindings.push({ local: idents[1], exported: idents[0] });
+    }
+    return;
+  }
+  for (let i = 0; i < node.namedChildCount; i++) {
+    const child = node.namedChild(i);
+    if (child) collectUseAsClauses(child, bindings);
+  }
+}
+
+function extractPhpNamedBindings(importNode: any): { local: string; exported: string }[] | undefined {
+  // namespace_use_declaration > namespace_use_clause*
+  if (importNode.type !== 'namespace_use_declaration') return undefined;
+
+  const bindings: { local: string; exported: string }[] = [];
+  for (let i = 0; i < importNode.namedChildCount; i++) {
+    const clause = importNode.namedChild(i);
+    if (clause?.type !== 'namespace_use_clause') continue;
+
+    // Look for a name child (alias) that is NOT inside qualified_name
+    let qualifiedName: any = null;
+    let aliasName: any = null;
+    for (let j = 0; j < clause.namedChildCount; j++) {
+      const child = clause.namedChild(j);
+      if (child?.type === 'qualified_name') qualifiedName = child;
+      else if (child?.type === 'name') aliasName = child;
+    }
+
+    if (!qualifiedName || !aliasName) continue;
+
+    // Extract last segment of qualified name as exported name
+    const fullText = qualifiedName.text;
+    const exportedName = fullText.includes('\\') ? fullText.split('\\').pop()! : fullText;
+
+    bindings.push({ local: aliasName.text, exported: exportedName });
+  }
+  return bindings.length > 0 ? bindings : undefined;
+}
+
+function extractCsharpNamedBindings(importNode: any): { local: string; exported: string }[] | undefined {
+  // using_directive with identifier (alias) + qualified_name (target)
+  if (importNode.type !== 'using_directive') return undefined;
+
+  let aliasIdent: any = null;
+  let qualifiedName: any = null;
+  for (let i = 0; i < importNode.namedChildCount; i++) {
+    const child = importNode.namedChild(i);
+    if (child?.type === 'identifier' && !aliasIdent) aliasIdent = child;
+    else if (child?.type === 'qualified_name') qualifiedName = child;
+  }
+
+  if (!aliasIdent || !qualifiedName) return undefined;
+
+  const fullText = qualifiedName.text;
+  const exportedName = fullText.includes('.') ? fullText.split('.').pop()! : fullText;
+
+  return [{ local: aliasIdent.text, exported: exportedName }];
 }
 
 function findChild(node: any, type: string): any {

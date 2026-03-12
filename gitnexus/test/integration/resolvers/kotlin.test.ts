@@ -226,3 +226,39 @@ describe('Kotlin receiver-constrained resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Alias import resolution: import com.example.User as U resolves U → User
+// ---------------------------------------------------------------------------
+
+describe('Kotlin alias import resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'kotlin-alias-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes with their methods', () => {
+    expect(getNodesByLabel(result, 'Class')).toEqual(['Repo', 'User']);
+    // Kotlin tree-sitter captures all function_declaration as Function, including class methods
+    expect(getNodesByLabel(result, 'Function')).toContain('save');
+    expect(getNodesByLabel(result, 'Function')).toContain('persist');
+  });
+
+  it('resolves u.save() to models/Models.kt and r.persist() to models/Models.kt via alias', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    const persistCall = calls.find(c => c.target === 'persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('main');
+    expect(saveCall!.targetFilePath).toBe('models/Models.kt');
+
+    expect(persistCall).toBeDefined();
+    expect(persistCall!.source).toBe('main');
+    expect(persistCall!.targetFilePath).toBe('models/Models.kt');
+  });
+});
+

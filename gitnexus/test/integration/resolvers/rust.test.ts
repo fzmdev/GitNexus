@@ -241,3 +241,49 @@ describe('Rust receiver-constrained resolution', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Alias import resolution: use crate::models::User as U resolves U → User
+// ---------------------------------------------------------------------------
+
+describe('Rust alias import resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'rust-alias-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo structs with their methods', () => {
+    const structs: string[] = [];
+    result.graph.forEachNode(n => {
+      if (n.label === 'Struct') structs.push(n.properties.name);
+    });
+    expect(structs).toContain('User');
+    expect(structs).toContain('Repo');
+    expect(getNodesByLabel(result, 'Function')).toContain('save');
+    expect(getNodesByLabel(result, 'Function')).toContain('persist');
+  });
+
+  it('resolves u.save() to src/models.rs and r.persist() to src/models.rs via alias', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    const persistCall = calls.find(c => c.target === 'persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('main');
+    expect(saveCall!.targetFilePath).toBe('src/models.rs');
+
+    expect(persistCall).toBeDefined();
+    expect(persistCall!.source).toBe('main');
+    expect(persistCall!.targetFilePath).toBe('src/models.rs');
+  });
+
+  it('emits exactly 1 IMPORTS edge: src/main.rs → src/models.rs', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    expect(imports.length).toBe(1);
+    expect(imports[0].sourceFilePath).toBe('src/main.rs');
+    expect(imports[0].targetFilePath).toBe('src/models.rs');
+  });
+});

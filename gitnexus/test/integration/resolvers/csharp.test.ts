@@ -280,3 +280,47 @@ describe('C# receiver-constrained resolution', () => {
     expect(repoCtor).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Alias import resolution: using U = Models.User resolves U → User
+// ---------------------------------------------------------------------------
+
+describe('C# alias import resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'csharp-alias-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects Main, Repo, and User classes', () => {
+    expect(getNodesByLabel(result, 'Class')).toEqual(['Main', 'Repo', 'User']);
+  });
+
+  it('resolves u.Save() to User.cs and r.Persist() to Repo.cs via alias', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'Save');
+    const persistCall = calls.find(c => c.target === 'Persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('Run');
+    expect(saveCall!.targetLabel).toBe('Method');
+    expect(saveCall!.targetFilePath).toBe('Models/User.cs');
+
+    expect(persistCall).toBeDefined();
+    expect(persistCall!.source).toBe('Run');
+    expect(persistCall!.targetLabel).toBe('Method');
+    expect(persistCall!.targetFilePath).toBe('Models/Repo.cs');
+  });
+
+  it('emits exactly 2 IMPORTS edges via alias resolution', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    expect(imports.length).toBe(2);
+    expect(edgeSet(imports)).toEqual([
+      'Main.cs → Repo.cs',
+      'Main.cs → User.cs',
+    ]);
+  });
+});
