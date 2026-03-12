@@ -116,11 +116,14 @@ export type PackageMap = Map<string, Set<string>>;
 
 export const createPackageMap = (): PackageMap => new Map();
 
-// Type: Map<ImportingFilePath, Map<LocalName, ResolvedSourceFilePath>>
+// Type: Map<ImportingFilePath, Map<LocalName, {sourcePath, exportedName}>>
 // Tracks which specific names a file imports from which sources (TS/Python only).
 // Used to tighten Tier 2a resolution: `import { User } from './models'`
 // means only `User` (not `Repo`) is visible from models.ts via this import.
-export type NamedImportMap = Map<string, Map<string, string>>;
+// Stores both the resolved source path and the original exported name so that
+// aliased imports (`import { User as U }`) can resolve U → User in the source file.
+export interface NamedImportBinding { sourcePath: string; exportedName: string }
+export type NamedImportMap = Map<string, Map<string, NamedImportBinding>>;
 
 export const createNamedImportMap = (): NamedImportMap => new Map();
 
@@ -536,7 +539,7 @@ function applyImportResult(
       if (!namedImportMap.has(filePath)) namedImportMap.set(filePath, new Map());
       const fileBindings = namedImportMap.get(filePath)!;
       for (const binding of namedBindings) {
-        fileBindings.set(binding.local, resolvedFile);
+        fileBindings.set(binding.local, { sourcePath: resolvedFile, exportedName: binding.exported });
       }
     }
   }

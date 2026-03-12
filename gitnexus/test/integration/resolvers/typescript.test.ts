@@ -316,6 +316,60 @@ describe('TypeScript named import disambiguation', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Alias import resolution: import { User as U } resolves U → User
+// ---------------------------------------------------------------------------
+
+describe('TypeScript alias import resolution', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'typescript-alias-imports'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo classes with their methods', () => {
+    expect(getNodesByLabel(result, 'Class')).toEqual(['Repo', 'User']);
+    expect(getNodesByLabel(result, 'Method')).toContain('save');
+    expect(getNodesByLabel(result, 'Method')).toContain('persist');
+  });
+
+  it('resolves new U() to User class and new R() to Repo class via alias', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const userCtor = calls.find(c => c.target === 'User' && c.targetLabel === 'Class');
+    const repoCtor = calls.find(c => c.target === 'Repo' && c.targetLabel === 'Class');
+
+    expect(userCtor).toBeDefined();
+    expect(userCtor!.source).toBe('main');
+    expect(userCtor!.targetFilePath).toBe('src/models.ts');
+
+    expect(repoCtor).toBeDefined();
+    expect(repoCtor!.source).toBe('main');
+    expect(repoCtor!.targetFilePath).toBe('src/models.ts');
+  });
+
+  it('resolves u.save() and r.persist() as member calls', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'save');
+    const persistCall = calls.find(c => c.target === 'persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('main');
+
+    expect(persistCall).toBeDefined();
+    expect(persistCall!.source).toBe('main');
+  });
+
+  it('emits IMPORTS edge from app.ts to models.ts', () => {
+    const imports = getRelationships(result, 'IMPORTS');
+    const appImport = imports.find(e => e.sourceFilePath === 'src/app.ts');
+    expect(appImport).toBeDefined();
+    expect(appImport!.targetFilePath).toBe('src/models.ts');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Variadic resolution: rest params don't get filtered by arity
 // ---------------------------------------------------------------------------
 

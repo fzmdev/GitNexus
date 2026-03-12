@@ -139,27 +139,6 @@ const extractVarName = (node: SyntaxNode): string | undefined => {
   return undefined;
 };
 
-/** Node types that declare variables with type annotations */
-const TYPED_DECLARATION_TYPES = new Set([
-  // TypeScript/JavaScript
-  'lexical_declaration',     // const/let x: Type = ...
-  'variable_declaration',    // var x: Type = ...
-  // Java/C#
-  'local_variable_declaration',  // Type x = ...
-  'field_declaration',           // Type x;
-  // Kotlin
-  'property_declaration',   // val/var x: Type = ...
-  // Rust
-  'let_declaration',        // let x: Type = ...
-  // Go
-  'var_declaration',        // var x Type
-  'short_var_declaration',  // x := Type{...}
-  // Python
-  'assignment',             // x: Type = ... (annotated_assignment child)
-  // Swift
-  'property_declaration',   // let/var x: Type = ...
-]);
-
 /** Node types for function/method parameters with type annotations */
 const TYPED_PARAMETER_TYPES = new Set([
   'required_parameter',      // TS: (x: Foo)
@@ -467,27 +446,44 @@ const extractFromGoVarDeclaration = (node: SyntaxNode, env: Map<string, string>)
   if (varName && typeName) env.set(varName, typeName);
 };
 
-/** Go: x := Foo{...} — infer type from composite literal */
+/** Go: x := Foo{...} — infer type from composite literal (handles multi-assignment) */
 const extractFromGoShortVarDeclaration = (node: SyntaxNode, env: Map<string, string>): void => {
   const left = node.childForFieldName('left');
   const right = node.childForFieldName('right');
   if (!left || !right) return;
 
-  // Handle expression_list wrapper
-  const valueNode = right.type === 'expression_list' ? right.firstNamedChild : right;
-  if (!valueNode) return;
+  // Collect LHS names and RHS values (may be expression_lists for multi-assignment)
+  const lhsNodes: SyntaxNode[] = [];
+  const rhsNodes: SyntaxNode[] = [];
 
-  // Only infer from composite literals: Foo{...}
-  if (valueNode.type === 'composite_literal') {
+  if (left.type === 'expression_list') {
+    for (let i = 0; i < left.namedChildCount; i++) {
+      const c = left.namedChild(i);
+      if (c) lhsNodes.push(c);
+    }
+  } else {
+    lhsNodes.push(left);
+  }
+
+  if (right.type === 'expression_list') {
+    for (let i = 0; i < right.namedChildCount; i++) {
+      const c = right.namedChild(i);
+      if (c) rhsNodes.push(c);
+    }
+  } else {
+    rhsNodes.push(right);
+  }
+
+  // Pair each LHS name with its corresponding RHS value
+  const count = Math.min(lhsNodes.length, rhsNodes.length);
+  for (let i = 0; i < count; i++) {
+    const valueNode = rhsNodes[i];
+    if (valueNode.type !== 'composite_literal') continue;
     const typeNode = valueNode.childForFieldName('type');
-    if (!typeNode) return;
+    if (!typeNode) continue;
     const typeName = extractSimpleTypeName(typeNode);
-    if (!typeName) return;
-
-    // Left side: identifier or expression_list
-    const nameNode = left.type === 'expression_list' ? left.firstNamedChild : left;
-    if (!nameNode) return;
-    const varName = extractVarName(nameNode);
+    if (!typeName) continue;
+    const varName = extractVarName(lhsNodes[i]);
     if (varName) env.set(varName, typeName);
   }
 };

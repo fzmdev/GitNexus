@@ -58,22 +58,28 @@ export const resolveSymbolInternal = (
 
   // Get all global definitions for subsequent tiers
   const allDefs = symbolTable.lookupFuzzy(name);
-  if (allDefs.length === 0) return null;
 
-  // Tier 2a-named: If the current file has named import bindings for this name,
-  // restrict to that specific source file (precision over file-level ImportMap)
+  // Tier 2a-named: Check named bindings BEFORE the empty-allDefs early return,
+  // because aliased imports (import { User as U }) mean lookupFuzzy('U') returns
+  // empty but we can resolve via the exported name.
   const namedBindings = namedImportMap?.get(currentFilePath);
   if (namedBindings) {
-    const boundSourceFile = namedBindings.get(name);
-    if (boundSourceFile) {
-      const boundDefs = allDefs.filter(def => def.filePath === boundSourceFile);
-      if (boundDefs.length === 1) {
-        return { definition: boundDefs[0], tier: 'import-scoped', candidateCount: boundDefs.length };
+    const binding = namedBindings.get(name);
+    if (binding) {
+      const lookupName = binding.exportedName;
+      // If local !== exported (alias), re-lookup with the exported name
+      const resolvedDefs = lookupName !== name
+        ? symbolTable.lookupFuzzy(lookupName).filter(def => def.filePath === binding.sourcePath)
+        : allDefs.filter(def => def.filePath === binding.sourcePath);
+      if (resolvedDefs.length === 1) {
+        return { definition: resolvedDefs[0], tier: 'import-scoped', candidateCount: resolvedDefs.length };
       }
-      if (boundDefs.length > 1) return null; // ambiguous within bound file
-      // boundDefs.length === 0 → fall through to file-level ImportMap
+      if (resolvedDefs.length > 1) return null; // ambiguous within bound file
+      // resolvedDefs.length === 0 → fall through to file-level ImportMap
     }
   }
+
+  if (allDefs.length === 0) return null;
 
   // Tier 2a: Import-scoped — check if any definition is in a file imported by currentFile
   const importedFiles = importMap.get(currentFilePath);

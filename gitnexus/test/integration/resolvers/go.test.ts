@@ -219,6 +219,49 @@ describe('Go struct literal resolution', () => {
 // Receiver-constrained resolution: typed variables disambiguate same-named methods
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Multi-assignment: user, repo := User{}, Repo{} — both sides captured in TypeEnv
+// ---------------------------------------------------------------------------
+
+describe('Go multi-assignment short var declaration', () => {
+  let result: PipelineResult;
+
+  beforeAll(async () => {
+    result = await runPipelineFromRepo(
+      path.join(FIXTURES, 'go-multi-assign'),
+      () => {},
+    );
+  }, 60000);
+
+  it('detects User and Repo structs with their methods', () => {
+    expect(getNodesByLabel(result, 'Struct')).toEqual(['Repo', 'User']);
+    expect(getNodesByLabel(result, 'Method')).toEqual(['Persist', 'Save']);
+  });
+
+  it('resolves both struct literals in multi-assignment: User{} and Repo{}', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const structCalls = calls.filter(c => c.targetLabel === 'Struct');
+    expect(edgeSet(structCalls)).toEqual([
+      'process → Repo',
+      'process → User',
+    ]);
+  });
+
+  it('resolves user.Save() to User.Save and repo.Persist() to Repo.Persist via receiver typing', () => {
+    const calls = getRelationships(result, 'CALLS');
+    const saveCall = calls.find(c => c.target === 'Save');
+    const cloneCall = calls.find(c => c.target === 'Persist');
+
+    expect(saveCall).toBeDefined();
+    expect(saveCall!.source).toBe('process');
+    expect(saveCall!.targetFilePath).toBe('models.go');
+
+    expect(cloneCall).toBeDefined();
+    expect(cloneCall!.source).toBe('process');
+    expect(cloneCall!.targetFilePath).toBe('models.go');
+  });
+});
+
 describe('Go receiver-constrained resolution', () => {
   let result: PipelineResult;
 

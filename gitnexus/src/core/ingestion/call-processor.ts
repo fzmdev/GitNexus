@@ -212,6 +212,25 @@ const collectTieredCandidates = (
   namedImportMap?: NamedImportMap,
 ): TieredCandidates | null => {
   const allDefs = symbolTable.lookupFuzzy(calledName);
+
+  // Tier 2a-named: Check named bindings BEFORE the empty-allDefs early return,
+  // because aliased imports (import { User as U }) mean lookupFuzzy('U') returns
+  // empty but we can resolve via the exported name.
+  const namedBindings = namedImportMap?.get(currentFile);
+  if (namedBindings) {
+    const binding = namedBindings.get(calledName);
+    if (binding) {
+      const lookupName = binding.exportedName;
+      const boundDefs = lookupName !== calledName
+        ? symbolTable.lookupFuzzy(lookupName).filter(def => def.filePath === binding.sourcePath)
+        : allDefs.filter(def => def.filePath === binding.sourcePath);
+      if (boundDefs.length > 0) {
+        return { candidates: boundDefs, tier: 'import-scoped' };
+      }
+      // Named binding exists but no matching def in source file → fall through
+    }
+  }
+
   if (allDefs.length === 0) return null;
 
   // Tier 1: Same-file — use globalIndex filtered to currentFile to catch overloads
@@ -219,19 +238,6 @@ const collectTieredCandidates = (
   const localDefs = allDefs.filter(def => def.filePath === currentFile);
   if (localDefs.length > 0) {
     return { candidates: localDefs, tier: 'same-file' };
-  }
-
-  // Tier 2a-named: If the file has a named binding for this name, restrict to that source
-  const namedBindings = namedImportMap?.get(currentFile);
-  if (namedBindings) {
-    const boundSourceFile = namedBindings.get(calledName);
-    if (boundSourceFile) {
-      const boundDefs = allDefs.filter(def => def.filePath === boundSourceFile);
-      if (boundDefs.length > 0) {
-        return { candidates: boundDefs, tier: 'import-scoped' };
-      }
-      // Named binding exists but no matching def in source file → fall through
-    }
   }
 
   const importedFiles = importMap.get(currentFile);
